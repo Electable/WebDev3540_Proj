@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<title>EventHub – Sign in</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&display=swap">
+<style>
+:root{--bg:#fff;--fg:#000;--line:#bdbdbd;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:"Playfair Display",Georgia,"Times New Roman",serif;min-height:100vh}
+.page{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center;max-width:1100px;margin:0 auto;padding:48px 40px;min-height:100vh}
+.left{display:flex;flex-direction:column;align-items:center}
+.logo{font-size:15px;font-weight:700;margin-bottom:56px}
+.wrap{width:100%;max-width:340px}
+h1{font-size:34px;line-height:1.05;margin:0;font-weight:700;letter-spacing:-.5px}
+.sub{margin:6px 0 34px;font-size:13px;font-weight:500}
+label{display:block;font-size:11px;font-weight:700;margin:0 0 5px}
+.field{margin-bottom:16px}
+input{width:100%;height:36px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--fg);padding:0 12px;font:500 14px/1 Georgia,serif;outline:none;transition:border-color .15s,box-shadow .15s}
+input:focus{border-color:#000;box-shadow:0 0 0 3px rgba(0,0,0,.1)}
+.btn{width:100%;height:38px;border-radius:999px;font:700 12.5px "Playfair Display",serif;text-decoration:none;color:inherit;display:flex;align-items:center;justify-content:center;transition:transform .1s,border-color .15s}
+.btn:active{transform:scale(.985)}
+.primary{background:#000;color:#fff;border:1px solid #000;margin-top:34px}
+.secondary{background:#fff;color:#000;border:1px solid var(--line);margin-top:10px;border-radius:14px}
+.secondary:hover{border-color:#000}
+.btn:focus-visible,.link:focus-visible{outline:2px solid #000;outline-offset:2px}
+.links{display:flex;justify-content:center;gap:26px;margin-top:12px}
+.link{color:#000;font:700 9.5px "Playfair Display",serif;text-decoration:underline;text-underline-offset:2px;padding:2px}
+.art{background:#111;border-radius:12px;overflow:hidden;aspect-ratio:3/4;width:100%;max-width:480px;justify-self:end}
+.art canvas{display:block;width:100%;height:100%}
+@media (max-width:820px){
+  .page{grid-template-columns:1fr;gap:32px;padding:32px 24px}
+  .art{order:-1;aspect-ratio:16/9;justify-self:stretch;max-width:none}
+  .logo{margin-bottom:32px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<main class="page">
+  <section class="left">
+    <div class="logo">EventHub</div>
+    <div class="wrap">
+      <h1>Welcome Back</h1>
+      <p class="sub">Sign in to manage your tickets</p>
+
+      <div class="field">
+        <label for="email">Email / Username</label>
+        <input id="email" type="text" autocomplete="username">
+      </div>
+      <div class="field">
+        <label for="pw">Password</label>
+        <input id="pw" type="password" autocomplete="current-password">
+      </div>
+
+      <a class="btn primary" data-link="signIn" href="#">Sign In</a>
+      <a class="btn secondary" data-link="google" href="#">Continue with Google</a>
+      <div class="links">
+        <a class="link" data-link="forgot" href="#">Forgot Password?</a>
+        <a class="link" id="MovetoCreateBtn" data-link="create" href="eventhub_signup.html">Create Account</a>
+      </div>
+    </div>
+  </section>
+  <aside class="art" aria-hidden="true"><canvas id="art"></canvas></aside>
+</main>
+
+<script>
+var AUTH_KEY = "eventhub_user";
+
+/* ---- Set your page links here. Leave "#" until the page exists. ---- */
+var LINKS = {
+  signIn: "eventhub_landing.html",
+  google: "#",
+  forgot: "eventhub_passReset.html",
+  create: "eventhub_signup.html"
+};
+
+function signIn(user){
+  try { localStorage.setItem(AUTH_KEY, JSON.stringify(user)); } catch(e) {}
+  window.location.href = LINKS.signIn;
+}
+
+document.querySelectorAll("[data-link]").forEach(function(a){
+  var key = a.dataset.link, url = LINKS[key];
+  a.setAttribute("href", url || "#");
+
+  // Sign In and Google need to set the signed-in flag, so handle them separately
+  if(key === "signIn"){
+    a.addEventListener("click", function(e){
+      e.preventDefault();
+      var id = document.getElementById("email").value.trim();
+      var pw = document.getElementById("pw").value;
+      if(!id || !pw) return;   // swap in real validation and error messages
+
+      // TODO: check the credentials with your auth service first,
+      // and only call signIn() if they're correct. Use the real name, email and photo.
+      signIn({
+        name: id.indexOf("@") > -1 ? id.split("@")[0] : id,
+        email: id.indexOf("@") > -1 ? id : "",
+        photo: ""
+      });
+    });
+  } else if(key === "google"){
+    a.addEventListener("click", function(e){
+      e.preventDefault();
+      // Add your Google OAuth flow here, then call signIn({ name, email, photo }).
+    });
+  } else if(!url || url === "#"){
+    a.addEventListener("click", function(e){ e.preventDefault(); });
+  }
+});
+
+// Pressing Enter in either field submits the form
+["email","pw"].forEach(function(id){
+  document.getElementById(id).addEventListener("keydown", function(e){
+    if(e.key === "Enter") document.querySelector('[data-link="signIn"]').click();
+  });
+});
+</script>
+</body>
+</html>
