@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Create event - Untitled Organiser</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gloock&family=Inter:wght@400;600&family=Geist+Mono&display=swap">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <div id="nav"></div>
+
+  <main class="org-main" id="main">
+        <div class="create">
+          <div>
+            <div class="label" id="crumb">Organiser &middot; Create event</div>
+            <h1 id="page-title">Create event</h1>
+            <div style="height:28px"></div>
+
+            <div class="stepper" id="stepper"></div>
+            <div id="step-area"></div>
+          </div>
+
+          <div class="art">
+            <div class="label" style="color:#fff">Quiet Stage</div>
+            <p style="margin-top:12px; font-family:var(--font-title); font-size:24px" id="art-text">Tell people what, when and where.</p>
+          </div>
+        </div>
+  </main>
+
+  <div id="footer"></div>
+
+  <script>
+
+  // ==========================================================
+  // SHARED: DATABASE (sample data, loading and saving)
+  // ==========================================================
+  var STORAGE_KEY = "untitled-data-v2";
+  var ME = "o1"; // the organiser who is "logged in" on the Organiser pages
+  var DB = null; // the whole database
+
+  // dates are text like 2026-11-20
+  function dateFromToday(days) {
+    var d = new Date();
+    d.setDate(d.getDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+
+  function loadDB() {
+    var saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      DB = JSON.parse(saved);
+    } else {
+      DB = makeSampleData();
+      saveDB();
+    }
+  }
+
+  function saveDB() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(DB));
+  }
+
+  function resetDB() {
+    localStorage.removeItem(STORAGE_KEY);
+    loadDB();
+  }
+
+  function newId(prefix) {
+    return prefix + Date.now().toString(36) + Math.floor(Math.random() * 1000);
+  }
+
+  function getEvent(id) {
+    return DB.events.find(function (e) { return e.id === id; });
+  }
+
+  function getUser(id) {
+    return DB.users.find(function (u) { return u.id === id; });
+  }
+
+  function getTiersFor(eventId) {
+    return DB.tiers.filter(function (t) { return t.eventId === eventId; });
+  }
+
+  // Add a line to the audit log (the Admin "Audit log" page shows these)
+  function addAudit(actor, action, detail) {
+    DB.audit.unshift({ id: newId("a"), time: new Date().toISOString(), actor: actor, action: action, target: detail });
+    saveDB();
+  }
+
+  // Totals for one event: tickets sold, money, orders (refunded orders do not count)
+  function eventStats(eventId) {
+    var sold = 0, revenue = 0, orders = 0;
+    DB.orders.forEach(function (o) {
+      if (o.eventId === eventId && o.status !== "Refunded") {
+        sold += o.qty;
+        revenue += o.total;
+        orders += 1;
+      }
+    });
+    return { sold: sold, revenue: revenue, orders: orders };
+  }
+
+  // Change an event's status and write it in the audit log
+  function setEventStatus(eventId, status, actor, note) {
+    var event = getEvent(eventId);
+    event.status = status;
+    if (note !== undefined) event.note = note;
+    saveDB();
+    addAudit(actor, "Set event to " + status, event.title);
+  }
+
+  // Reports that are still waiting for an admin (New or Open)
+  function openReports() {
+    return DB.reports.filter(function (r) { return r.status !== "Closed"; });
+  }
+
+  // Word the Admin sees for an event: Live, Review, Flagged, Draft, Rejected, Cancelled
+  function adminEventStatus(event) {
+    if (event.status === "Published") {
+      var flagged = openReports().some(function (r) { return r.type === "Event" && r.targetId === event.id; });
+      return flagged ? "Flagged" : "Live";
+    }
+    if (event.status === "Pending") return "Review";
+    return event.status;
+  }
+
+  // ---------- sample data ----------
+  function makeSampleData() {
+    var data = {};
+
+    // Users: o1 is you (the organiser). The rest are made up.
+    data.users = [
+      { id: "o1", name: "Kamloops Live", email: "hello@kamloopslive.test", role: "Organiser", status: "Active", joined: dateFromToday(-300), lastActive: "Today", phone: "250-555-0142", website: "kamloopslive.test", city: "Kamloops, BC", about: "Live music and community events in Kamloops." },
+      { id: "o2", name: "Riverside Arts", email: "team@riversidearts.test", role: "Organiser", status: "Active", joined: dateFromToday(-220), lastActive: "Today" },
+      { id: "o3", name: "North Shore Sports", email: "info@northshore.test", role: "Organiser", status: "Active", joined: dateFromToday(-150), lastActive: "Yesterday" },
+      { id: "o4", name: "Summit Talks", email: "hi@summittalks.test", role: "Organiser", status: "Active", joined: dateFromToday(-90), lastActive: "3 days ago" },
+      { id: "c1", name: "Ava Martin", email: "ava.martin@mail.test", role: "Customer", status: "Active", joined: dateFromToday(-200), lastActive: "Today" },
+      { id: "c2", name: "Liam Chen", email: "liam.chen@mail.test", role: "Customer", status: "Active", joined: dateFromToday(-180), lastActive: "Yesterday" },
+      { id: "c3", name: "Sofia Rossi", email: "sofia.rossi@mail.test", role: "Customer", status: "Flagged", joined: dateFromToday(-160), lastActive: "Today" },
+      { id: "c4", name: "Noah Singh", email: "noah.singh@mail.test", role: "Customer", status: "Active", joined: dateFromToday(-140), lastActive: "5 days ago" },
+      { id: "c5", name: "Emma Okafor", email: "emma.okafor@mail.test", role: "Customer", status: "Active", joined: dateFromToday(-70), lastActive: "Today" },
+      { id: "c6", name: "Kofi Mensah", email: "kofi.mensah@mail.test", role: "Customer", status: "Suspended", joined: dateFromToday(-100), lastActive: "2 weeks ago", suspendReason: "Chargebacks" },
+      { id: "c7", name: "Mia Johansson", email: "mia.j@mail.test", role: "Customer", status: "Active", joined: dateFromToday(-60), lastActive: "Today" },
+      { id: "c8", name: "Ethan Park", email: "ethan.park@mail.test", role: "Customer", status: "Active", joined: dateFromToday(-45), lastActive: "Yesterday" },
+      { id: "c9", name: "Zara Ahmed", email: "zara.ahmed@mail.test", role: "Customer", status: "Active", joined: dateFromToday(-40), lastActive: "Today" },
+      { id: "c10", name: "Owen Walsh", email: "owen.walsh@mail.test", role: "Customer", status: "Active", joined: dateFromToday(-20), lastActive: "Today" }
+    ];
+
+    // Events. status: Draft, Pending, Published, Rejected, Cancelled
+    data.events = [
+      { id: "e1", organiserId: "o1", title: "Riverside Live Night", category: "Concert", date: dateFromToday(21), time: "19:30", endTime: "23:00", venue: "Sandman Centre", address: "300 Lorne St, Kamloops", capacity: 400, description: "An evening of local bands on the river stage.", status: "Published", note: "" },
+      { id: "e2", organiserId: "o1", title: "Startup Pitch Night", category: "Conference", date: dateFromToday(35), time: "18:00", endTime: "21:00", venue: "TRU Campus Hall", address: "805 TRU Way, Kamloops", capacity: 150, description: "Ten founders, five minutes each, one winner.", status: "Published", note: "" },
+      { id: "e3", organiserId: "o1", title: "Spring Tech Meetup", category: "Conference", date: dateFromToday(80), time: "17:00", endTime: "20:00", venue: "Innovation Hub", address: "12 Victoria St, Kamloops", capacity: 80, description: "Talks and demos from local developers.", status: "Draft", note: "" },
+      { id: "e4", organiserId: "o1", title: "Charity Gala Dinner", category: "Festival", date: dateFromToday(50), time: "18:30", endTime: "22:30", venue: "Colombo Lodge", address: "950 Lorne St, Kamloops", capacity: 120, description: "Dinner and auction supporting the food bank.", status: "Pending", note: "" },
+      { id: "e5", organiserId: "o1", title: "Winter Night Market", category: "Festival", date: dateFromToday(-12), time: "16:00", endTime: "22:00", venue: "Riverside Park", address: "100 Lorne St, Kamloops", capacity: 300, description: "Food, crafts and music under the lights.", status: "Published", note: "" },
+      { id: "e6", organiserId: "o2", title: "Gallery Late: Light and Glass", category: "Theatre", date: dateFromToday(14), time: "19:00", endTime: "22:00", venue: "Kamloops Art Gallery", address: "465 Victoria St, Kamloops", capacity: 90, description: "After-hours gallery tour with live performance.", status: "Published", note: "" },
+      { id: "e7", organiserId: "o2", title: "Open Air Cinema", category: "Theatre", date: dateFromToday(60), time: "21:00", endTime: "23:30", venue: "Riverside Park", address: "100 Lorne St, Kamloops", capacity: 250, description: "Classic films on a big screen.", status: "Pending", note: "" },
+      { id: "e8", organiserId: "o3", title: "Valley 10K Run", category: "Sport", date: dateFromToday(28), time: "08:00", endTime: "12:00", venue: "McArthur Island", address: "1655 Island Pkwy, Kamloops", capacity: 500, description: "A flat, fast 10 kilometre road race.", status: "Published", note: "" },
+      { id: "e9", organiserId: "o3", title: "Hockey Fan Fest", category: "Sport", date: dateFromToday(40), time: "12:00", endTime: "17:00", venue: "Sandman Centre", address: "300 Lorne St, Kamloops", capacity: 600, description: "Meet the players and enjoy family games.", status: "Pending", note: "" },
+      { id: "e10", organiserId: "o4", title: "Summit Talks: Design", category: "Conference", date: dateFromToday(18), time: "09:00", endTime: "17:00", venue: "Convention Centre", address: "1360 Water St, Kelowna", capacity: 200, description: "A day of talks on product design.", status: "Published", note: "" },
+      { id: "e11", organiserId: "o4", title: "Jazz in the Park", category: "Concert", date: dateFromToday(-30), time: "15:00", endTime: "20:00", venue: "City Park", address: "1600 Abbott St, Kelowna", capacity: 350, description: "Afternoon jazz with food trucks.", status: "Published", note: "" },
+      { id: "e12", organiserId: "o4", title: "Secret Warehouse Party", category: "Concert", date: dateFromToday(25), time: "22:00", endTime: "02:00", venue: "To be announced", address: "Vancouver", capacity: 1200, description: "Location revealed the day before.", status: "Rejected", note: "Venue is missing. Please add a real address." }
+    ];
+
+    // Ticket types: General admission and VIP for every event
+    data.tiers = [];
+    data.events.forEach(function (e) {
+      var base = 20 + (e.capacity % 7) * 5;
+      data.tiers.push({ id: "t" + e.id + "a", eventId: e.id, name: "General admission", price: base, qty: Math.round(e.capacity * 0.7), sold: 0, salesStart: dateFromToday(-100), salesEnd: e.date, visible: true });
+      data.tiers.push({ id: "t" + e.id + "b", eventId: e.id, name: "VIP", price: base * 3, qty: Math.round(e.capacity * 0.2), sold: 0, salesStart: dateFromToday(-100), salesEnd: e.date, visible: true });
+    });
+
+    // Orders: made with a loop so we do not type 100 of them
+    data.orders = [];
+    var customers = data.users.filter(function (u) { return u.role === "Customer"; });
+    data.events.forEach(function (e, index) {
+      if (e.status !== "Published") return;
+      var tiers = data.tiers.filter(function (t) { return t.eventId === e.id; });
+      for (var i = 0; i < 14; i++) {
+        var tier = tiers[i % 3 === 2 ? 1 : 0];
+        var qty = 1 + (i % 3);
+        var buyer = customers[(i * 3 + index) % customers.length];
+        var status = "Paid";
+        if (i === 7 && index % 2 === 0) status = "Refunded";
+        if (i === 8 && index === 5) status = "Dispute";
+        data.orders.push({
+          eventId: e.id, tierId: tier.id, buyerId: buyer.id, buyer: buyer.name, email: buyer.email,
+          qty: qty, total: qty * tier.price, status: status,
+          date: dateFromToday(-(((i * 9 + index * 5) % 100) + 1))
+        });
+        if (status !== "Refunded") tier.sold += qty;
+      }
+    });
+    // newest first, then give each order a number like UNT-48213
+    data.orders.sort(function (a, b) { return b.date.localeCompare(a.date); });
+    data.orders.forEach(function (o, i) { o.id = "UNT-" + (48300 - i); });
+
+    // Page views for each published event (for the organiser dashboard)
+    data.events.forEach(function (e) {
+      var sold = 0;
+      data.orders.forEach(function (o) { if (o.eventId === e.id && o.status !== "Refunded") sold += o.qty; });
+      e.views = e.status === "Published" ? sold * 20 + 250 : 0;
+      e.viewsPrev = Math.round(e.views * 0.94);
+    });
+
+    // Payouts: money owed to organisers after their event
+    data.payouts = [
+      { id: "p1", organiserId: "o1", eventId: "e5", amount: 1480.5, status: "Ready", date: dateFromToday(-9), bankVerified: true },
+      { id: "p2", organiserId: "o4", eventId: "e11", amount: 2210, status: "Paid", date: dateFromToday(-26), bankVerified: true },
+      { id: "p3", organiserId: "o2", eventId: "e6", amount: 640, status: "Ready", date: dateFromToday(17), bankVerified: true },
+      { id: "p4", organiserId: "o3", eventId: "e8", amount: 38, status: "Ready", date: dateFromToday(31), bankVerified: true },
+      { id: "p5", organiserId: "o4", eventId: "e10", amount: 2600, status: "Ready", date: dateFromToday(21), bankVerified: false },
+      { id: "p6", organiserId: "o3", eventId: "e8", amount: 1175, status: "Held", date: dateFromToday(21), bankVerified: true }
+    ];
+
+    // Reports: grouped by reason and subject. "count" is how many people reported it.
+    // reason: Misleading listing, Spam account, Duplicate event, Abusive comment. status: New, Open, Closed
+    data.reports = [
+      { id: "r1", reason: "Misleading listing", type: "Event", targetId: "e8", count: 3, status: "Open", detail: "Description says 10K but the map shows 8K.", date: dateFromToday(-6) },
+      { id: "r2", reason: "Spam account", type: "User", targetId: "c3", count: 2, status: "Open", detail: "Posting links in event comments.", date: dateFromToday(-4) },
+      { id: "r3", reason: "Duplicate event", type: "Event", targetId: "e7", count: 1, status: "New", date: dateFromToday(-1), detail: "Looks the same as another listing." },
+      { id: "r4", reason: "Abusive comment", type: "User", targetId: "c9", count: 1, status: "Closed", detail: "Rude message in an event chat.", date: dateFromToday(-15) },
+      { id: "r5", reason: "Misleading listing", type: "Event", targetId: "e12", count: 6, status: "Open", detail: "No venue listed, could be a scam.", date: dateFromToday(-3) },
+      { id: "r6", reason: "Spam account", type: "User", targetId: "c6", count: 4, status: "Open", detail: "Used stolen card details on two orders.", date: dateFromToday(-5) }
+    ];
+
+    // Admin team (Settings > Admins and roles)
+    data.admins = [
+      { id: "ad1", name: "Mia Tremblay", email: "mia@untitled.test", role: "Super admin", status: "Active", lastActive: "Today" },
+      { id: "ad2", name: "Noah Patel", email: "noah@untitled.test", role: "Moderator", status: "Active", lastActive: "Today" },
+      { id: "ad3", name: "Kemi Adebayo", email: "kemi@untitled.test", role: "Finance", status: "Active", lastActive: "2 days ago" },
+      { id: "ad4", name: "Dan Lee", email: "dan@untitled.test", role: "Support", status: "Invited", lastActive: "Not yet" }
+    ];
+
+    // Platform settings (Admin > Settings)
+    data.settings = {
+      platformName: "Untitled", supportEmail: "support@untitled.test", currency: "CAD", timezone: "Pacific Time (Vancouver)",
+      categories: ["Concert", "Sport", "Theatre", "Conference", "Festival"],
+      maintenance: false,
+      ticketsPerOrder: 8, seatHold: 10, guestCheckout: true, emailVerify: true,
+      refundWindow: 48, refundMethod: "Original payment", lateRefunds: true, flagAfter: 3, autoSuspend: false,
+      requireApproval: true, autoApproveVerified: false, reviewTarget: 24,
+      serviceFee: 8, perTicketFee: 0.5, feePaidBy: "Buyer", maxCapacity: 20000, maxTicketTypes: 10, bankBeforePublish: true,
+      twoFactor: true, sessionTimeout: 30,
+      provider: "Stripe", taxRate: 5, descriptor: "UNTITLED EVENTS", payoutDelay: 3, minPayout: 50, holdDisputes: true, verifiedBank: true,
+      notifyApproval: true, notifyPayout: true, notifyReport: true, notifyDispute: true, notifyDaily: false, alertEmail: "admin@untitled.test"
+    };
+
+    // Audit log starts with a few lines from the last day
+    var hour = 3600000;
+    data.audit = [
+      { id: "a1", time: new Date(Date.now() - hour * 1).toISOString(), actor: "Mia Tremblay", action: "Released payout", target: "Okafor Events · $6,210.00" },
+      { id: "a2", time: new Date(Date.now() - hour * 2).toISOString(), actor: "System", action: "Hold expired", target: "Order UNT-48214 · 3 seats" },
+      { id: "a3", time: new Date(Date.now() - hour * 4).toISOString(), actor: "Mia Tremblay", action: "Suspended user", target: "Kofi Mensah" },
+      { id: "a4", time: new Date(Date.now() - hour * 6).toISOString(), actor: "Noah Patel", action: "Approved event", target: "Valley 10K Run" },
+      { id: "a5", time: new Date(Date.now() - hour * 8).toISOString(), actor: "System", action: "Refund issued", target: "UNT-48210 · $189.00" },
+      { id: "a6", time: new Date(Date.now() - hour * 52).toISOString(), actor: "Noah Patel", action: "Rejected event", target: "Secret Warehouse Party" },
+      { id: "a7", time: new Date(Date.now() - hour * 90).toISOString(), actor: "Mia Tremblay", action: "Invited admin", target: "dan@untitled.test" }
+    ];
+
+    return data;
+  }
+
+  loadDB();
+
+
+  // ==========================================================
+  // SHARED: HELPERS (formatting, pop-ups, toast, CSV)
+  // ==========================================================
+  // Make text safe to put inside HTML
+  function esc(text) {
+    return String(text === undefined || text === null ? "" : text)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function money(n) {
+    return "$" + Number(n).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function formatDate(text) {
+    if (!text) return "";
+    var d = new Date(text.length === 10 ? text + "T12:00:00" : text);
+    return d.toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
+  }
+
+  // "14 Jun" style, used in page labels
+  function shortDate(text) {
+    var d = new Date(text + "T12:00:00");
+    return d.getDate() + " " + d.toLocaleDateString("en-CA", { month: "short" });
+  }
+
+  // "10:42" for today's entries, otherwise "Nov 3, 10:42"
+  function formatTime(text) {
+    var d = new Date(text);
+    var clock = d.toLocaleTimeString("en-CA", { hour: "2-digit", minute: "2-digit", hour12: false });
+    if (Date.now() - d.getTime() < 86400000) return clock;
+    return d.toLocaleDateString("en-CA", { month: "short", day: "numeric" }) + ", " + clock;
+  }
+
+  // A coloured pill for a status word
+  function tag(status) {
+    var colours = {
+      Live: "accent", Published: "ok", Active: "ok", Paid: "ok", Resolved: "ok", Verified: "ok",
+      Review: "warn", Pending: "warn", Ready: "warn", Open: "dark", New: "outline", Invited: "warn", Held: "warn", Flagged: "warn", "Test mode": "warn", Scheduled: "warn",
+      Rejected: "bad", Suspended: "bad", Dispute: "bad", Cancelled: "bad", "Sold out": "dark",
+      Draft: "grey", Refunded: "grey", Closed: "outline", Past: "grey", Dismissed: "grey"
+    };
+    return '<span class="tag ' + (colours[status] || "grey") + '">' + esc(status) + "</span>";
+  }
+
+  // The word an organiser sees for their own event
+  function organiserStatus(event) {
+    if (event.status === "Published") return event.date < dateFromToday(0) ? "Past" : "Live";
+    if (event.status === "Pending") return "Review";
+    return event.status;
+  }
+
+  // Read a value from the page address, e.g. ?id=e1
+  function getParam(name) {
+    return new URLSearchParams(window.location.search).get(name);
+  }
+
+  // Attach a click to every element matching the selector.
+  // The function gets the value of the data attribute (e.g. data-open="e1" gives "e1").
+  function onClickAll(selector, dataName, action) {
+    document.querySelectorAll(selector).forEach(function (el) {
+      el.onclick = function (e) {
+        e.stopPropagation();
+        action(el.dataset[dataName]);
+      };
+    });
+  }
+
+  // ---------- toast (small message at the bottom) ----------
+  function showToast(message, isError) {
+    var old = document.querySelector(".toast");
+    if (old) old.remove();
+    var box = document.createElement("div");
+    box.className = "toast" + (isError ? " bad" : "");
+    box.textContent = message;
+    document.body.appendChild(box);
+    setTimeout(function () { box.remove(); }, 2800);
+  }
+
+  // ---------- modal (pop-up window) ----------
+  // buttons: [{ text: "Save", className: "primary", onClick: function () { ... } }]
+  // If onClick returns false the modal stays open (used when a form has an error).
+  function openModal(title, bodyHtml, buttons) {
+    closeModal();
+    var overlay = document.createElement("div");
+    overlay.className = "overlay";
+    overlay.id = "modal-overlay";
+    overlay.innerHTML =
+      '<div class="modal">' +
+        '<div class="modal-head"><h2>' + esc(title) + '</h2><button class="modal-close" id="modal-x">&times;</button></div>' +
+        '<div class="modal-body">' + bodyHtml + "</div>" +
+        '<div class="modal-foot" id="modal-foot"></div>' +
+      "</div>";
+    document.body.appendChild(overlay);
+
+    var foot = document.getElementById("modal-foot");
+    (buttons || []).forEach(function (b) {
+      var button = document.createElement("button");
+      button.className = "btn " + (b.className || "");
+      button.textContent = b.text;
+      button.onclick = function () {
+        var result = b.onClick ? b.onClick() : true;
+        if (result !== false) closeModal();
+      };
+      foot.appendChild(button);
+    });
+
+    document.getElementById("modal-x").onclick = closeModal;
+    overlay.onclick = function (e) { if (e.target === overlay) closeModal(); };
+  }
+
+  function closeModal() {
+    var overlay = document.getElementById("modal-overlay");
+    if (overlay) overlay.remove();
+  }
+
+  // Ask "are you sure?" and run a function if the user says yes
+  function confirmBox(title, message, yesText, onYes, isDanger) {
+    openModal(title, '<p class="muted">' + message + "</p>", [
+      { text: "Cancel" },
+      { text: yesText, className: isDanger ? "danger-solid" : "primary", onClick: onYes }
+    ]);
+  }
+
+  // ---------- download a CSV file ----------
+  // rows is a list of lists: [["Name","Email"],["Ava","ava@x.test"]]
+  function downloadCSV(filename, rows) {
+    var text = rows.map(function (row) {
+      return row.map(function (cell) { return '"' + String(cell).replace(/"/g, '""') + '"'; }).join(",");
+    }).join("\n");
+    var link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+    link.download = filename;
+    link.click();
+  }
+
+  // ---------- simple pager for long tables ----------
+  function pageOf(rows, page, size) {
+    var start = (page - 1) * size;
+    return rows.slice(start, start + size);
+  }
+
+  function pagerHtml(total, page, size) {
+    var pages = Math.max(1, Math.ceil(total / size));
+    if (pages === 1) return "<span>" + total + " results</span>";
+    return "<span>" + total + " results</span><span>" +
+      '<button class="btn small" data-page="' + (page - 1) + '"' + (page <= 1 ? " disabled" : "") + ">Previous</button> " +
+      " Page " + page + " of " + pages + " " +
+      '<button class="btn small" data-page="' + (page + 1) + '"' + (page >= pages ? " disabled" : "") + ">Next</button></span>";
+  }
+
+  // The "Reset demo data" link in the footer / sidebar
+  function hookResetLink() {
+    document.getElementById("reset-link").onclick = function (e) {
+      e.preventDefault();
+      confirmBox("Reset demo data", "This puts all events, orders, users and settings back to the starting sample data.", "Reset", function () {
+        resetDB();
+        sessionStorage.clear();
+        window.location.reload();
+      }, true);
+    };
+  }
+
+  // ---------- log in / log out and the round account button ----------
+  var LOGGED_OUT_KEY = "untitled-logged-out";
+
+  function isLoggedOut() {
+    try { return sessionStorage.getItem(LOGGED_OUT_KEY) === "1"; } catch (e) { return false; }
+  }
+
+  // Log out: remember it for this tab and go back to the start page.
+  function logOut() {
+    try { sessionStorage.setItem(LOGGED_OUT_KEY, "1"); } catch (e) {}
+    window.location.href = "../index.html";
+  }
+
+  // Pages call this first: if you logged out, go back to the start page.
+  function requireLogin() {
+    if (isLoggedOut()) window.location.replace("../index.html");
+  }
+
+  // "Kamloops Live" -> "KL"
+  function initialsOf(name) {
+    var words = String(name).trim().split(/\s+/);
+    var letters = words[0].charAt(0) + (words.length > 1 ? words[words.length - 1].charAt(0) : "");
+    return letters.toUpperCase();
+  }
+
+  // The orange circle with a drop-down menu. topHtml is shown above the links.
+  function accountMenuHtml(name, topHtml, linksHtml) {
+    return '<div class="menu-wrap">' +
+        '<button class="avatar" id="avatar-btn" aria-haspopup="true" aria-expanded="false" title="Account menu">' + esc(initialsOf(name)) + "</button>" +
+        '<div class="menu" id="avatar-menu" hidden>' + topHtml + linksHtml +
+          '<a href="#" id="logout-link" class="logout">Log out</a>' +
+        "</div>" +
+      "</div>";
+  }
+
+  // Open and close the menu, and make "Log out" work.
+  function hookAccountMenu() {
+    var button = document.getElementById("avatar-btn");
+    var menu = document.getElementById("avatar-menu");
+
+    function setOpen(open) {
+      menu.hidden = !open;
+      button.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    button.onclick = function (e) { e.stopPropagation(); setOpen(menu.hidden); };
+    document.onclick = function (e) { if (!menu.contains(e.target)) setOpen(false); };
+    document.onkeydown = function (e) { if (e.key === "Escape") setOpen(false); };
+    document.getElementById("logout-link").onclick = function (e) { e.preventDefault(); logOut(); };
+  }
+
+
+  // ==========================================================
+  // SHARED: PAGE FRAME (top navigation and footer)
+  // ==========================================================
+  // The event used by the "Dashboard" and "Ticket types" links in the menu:
+  // the one you are looking at, otherwise your first live event.
+  function defaultEventId(currentId) {
+    if (currentId) return currentId;
+    var mine = DB.events.filter(function (e) { return e.organiserId === ME; });
+    var live = mine.filter(function (e) { return e.status === "Published" && e.date >= dateFromToday(0); });
+    if (live.length > 0) return live[0].id;
+    return mine.length > 0 ? mine[0].id : "";
+  }
+
+  function buildOrganiserFrame(activePage, currentEventId) {
+    requireLogin();
+    var me = getUser(ME);
+    var id = defaultEventId(currentEventId);
+    var links = [
+      ["my-events.html", "My Events"],
+      ["create-event.html", "Create event"],
+      ["event-dashboard.html?id=" + id, "Dashboard"],
+      ["ticket-types.html?id=" + id, "Ticket types"]
+    ];
+    var linkHtml = links.map(function (l) {
+      var active = l[0].split("?")[0] === activePage;
+      return '<a href="' + l[0] + '"' + (active ? ' class="active"' : "") + ">" + l[1] + "</a>";
+    }).join("");
+
+    document.getElementById("nav").innerHTML =
+      '<div class="org-nav">' +
+        '<a class="brand" href="my-events.html">UNTITLED</a>' +
+        '<div class="links">' + linkHtml + "</div>" +
+        '<div class="right"><span class="pill brand-pill">ORGANISER</span>' +
+          accountMenuHtml(me.name,
+            '<div class="menu-top"><b>' + esc(me.name) + '</b><span>' + esc(me.email) + "</span></div>",
+            '<a href="profile.html">Profile</a><a href="account-settings.html">Settings</a>') +
+        "</div>" +
+      "</div>";
+
+    // Footer: links to pages owned by other team members just show a message
+    function other(text) { return '<a href="#" class="other-page">' + text + "</a>"; }
+    document.getElementById("footer").innerHTML =
+      '<div class="footer">' +
+        '<div class="footer-grid">' +
+          '<div><div class="brand">UNTITLED</div><p class="label" style="margin-top:10px">Events and ticketing</p></div>' +
+          '<div><div class="label">Explore</div>' + other("Events") + other("Calendar") + other("Venues") + "</div>" +
+          '<div><div class="label">Organisers</div><a href="my-events.html">My Events</a><a href="create-event.html">Create event</a><a href="ticket-types.html?id=' + id + '">Ticket types</a></div>' +
+          '<div><div class="label">Company</div>' + other("About") + other("Help") + other("Contact") + "</div>" +
+          '<div><div class="label">Legal</div>' + other("Terms") + other("Privacy") + other("Refunds") + "</div>" +
+        "</div>" +
+        '<div class="footer-bottom"><span>&copy; 2026 Untitled &middot; COMP 3540 &middot; UI only</span>' +
+          '<span><a href="../admin/overview.html">Switch to Admin</a> &nbsp; <a href="#" id="reset-link">Reset demo data</a></span></div>' +
+      "</div>";
+
+    document.querySelectorAll(".other-page").forEach(function (a) {
+      a.onclick = function (e) {
+        e.preventDefault();
+        showToast("That page belongs to another part of the project.");
+      };
+    });
+    hookResetLink();
+    hookAccountMenu();
+  }
+
+
+  // ==========================================================
+  // THIS PAGE: create-event.html
+  // ==========================================================
+  buildOrganiserFrame("create-event.html");
+
+  var STEPS = ["Basics", "Date and venue", "Tickets", "Publish"];
+  var TITLES = ["Create event", "Date and venue", "Tickets", "Review and publish"];
+  var ART_TEXT = [
+    "Tell people what, when and where.",
+    "Pick a date and a place that fits your crowd.",
+    "Set up at least one ticket type.",
+    "One last look before it goes out."
+  ];
+
+  var OK_TAG = '<span class="tag ok">OK</span>';
+  var MISSING_TAG = '<span class="tag bad">Missing</span>';
+
+  var step = 1;
+  var draft = loadDraft();
+
+  function emptyDraft() {
+    return {
+      title: "", category: (getUser(ME).prefs && getUser(ME).prefs.defaultCategory) || "", description: "", cover: "",
+      date: "", time: "", endTime: "", venue: "", address: "", capacity: "",
+      tickets: [{ name: "General admission", price: "", qty: "" }]
+    };
+  }
+
+  function loadDraft() {
+    var saved = sessionStorage.getItem("create-draft");
+    return saved ? JSON.parse(saved) : emptyDraft();
+  }
+
+  function saveDraft() {
+    sessionStorage.setItem("create-draft", JSON.stringify(draft));
+  }
+
+  // one labelled field with an optional hint and error message
+  function fieldHtml(label, inputHtml, error, hint) {
+    return '<div class="field"><label>' + label + "</label>" + inputHtml +
+      (hint ? '<div class="hint">' + hint + "</div>" : "") +
+      (error ? '<div class="error">' + error + "</div>" : "") + "</div>";
+  }
+
+  // ---------- drawing ----------
+  function draw(errors) {
+    errors = errors || {};
+    drawStepper();
+    document.getElementById("page-title").textContent = TITLES[step - 1];
+    document.getElementById("art-text").textContent = ART_TEXT[step - 1];
+
+    var html = "";
+    if (step === 1) html = stepBasics(errors);
+    if (step === 2) html = stepVenue(errors);
+    if (step === 3) html = stepTickets(errors);
+    if (step === 4) html = stepPublish(errors);
+    document.getElementById("step-area").innerHTML = html;
+    hookButtons();
+  }
+
+  function drawStepper() {
+    var html = "";
+    STEPS.forEach(function (name, i) {
+      var n = i + 1;
+      var cls = n === step ? "current" : n < step ? "done" : "";
+      html += '<div class="step ' + cls + '" data-step="' + n + '">0' + n + " " + name + "</div>";
+    });
+    document.getElementById("stepper").innerHTML = html;
+
+    // click a finished step to go back to it
+    document.querySelectorAll(".step.done").forEach(function (el) {
+      el.onclick = function () { readStep(); step = Number(el.dataset.step); draw(); };
+    });
+  }
+
+  function stepBasics(errors) {
+    var categories = DB.settings.categories.map(function (c) {
+      return "<option" + (draft.category === c ? " selected" : "") + ">" + esc(c) + "</option>";
+    }).join("");
+
+    return fieldHtml("Event name", '<input type="text" id="f-title" value="' + esc(draft.title) + '" placeholder="e.g. Summer Stage">', errors.title) +
+      fieldHtml("Category", '<select id="f-category"><option value="">Choose a category</option>' + categories + "</select>", errors.category) +
+      fieldHtml("Description", '<textarea id="f-description" placeholder="Short description of the event">' + esc(draft.description) + "</textarea>", errors.description, "At least 20 characters.") +
+      fieldHtml("Cover image", '<label class="dropzone"><input type="file" id="f-cover" accept="image/*" style="display:none"><span id="cover-name">' +
+        (draft.cover ? esc(draft.cover) : "Upload or drag a file") + "</span></label>", "", "Optional. This demo does not upload files, it only remembers the file name.") +
+      buttonsHtml();
+  }
+
+  function stepVenue(errors) {
+    return '<div class="row">' +
+        fieldHtml("Date", '<input type="date" id="f-date" value="' + esc(draft.date) + '">', errors.date) +
+        fieldHtml("Start time", '<input type="time" id="f-time" value="' + esc(draft.time) + '">', errors.time) +
+        fieldHtml("End time", '<input type="time" id="f-end" value="' + esc(draft.endTime) + '">') +
+      "</div>" +
+      fieldHtml("Venue name", '<input type="text" id="f-venue" value="' + esc(draft.venue) + '" placeholder="e.g. Riverside Amphitheatre">', errors.venue) +
+      fieldHtml("Address", '<input type="text" id="f-address" value="' + esc(draft.address) + '" placeholder="e.g. 100 Main Street, Kamloops">', errors.address) +
+      fieldHtml("Capacity", '<input type="number" id="f-capacity" min="1" value="' + esc(draft.capacity) + '">', errors.capacity,
+        "Most people allowed in. The platform limit is " + DB.settings.maxCapacity.toLocaleString() + ".") +
+      buttonsHtml();
+  }
+
+  function stepTickets(errors) {
+    var saleWindow = draft.date ? "Now to " + shortDate(draft.date) : "Now to event date";
+    var rows = draft.tickets.map(function (t, i) {
+      return "<tr>" +
+        '<td><input type="text" data-t="name" data-i="' + i + '" value="' + esc(t.name) + '"></td>' +
+        '<td><input type="number" min="0" step="0.01" data-t="price" data-i="' + i + '" value="' + esc(t.price) + '" placeholder="0.00"></td>' +
+        '<td><input type="number" min="1" data-t="qty" data-i="' + i + '" value="' + esc(t.qty) + '"></td>' +
+        "<td>" + saleWindow + "</td>" +
+        '<td class="actions"><button class="btn small danger" data-remove="' + i + '"' + (draft.tickets.length === 1 ? " disabled" : "") + ">Remove</button></td>" +
+        "</tr>";
+    }).join("");
+
+    return '<table><tr><th>Ticket type</th><th>Price (CAD)</th><th>Quantity</th><th>Sale window</th><th></th></tr>' + rows + "</table>" +
+      (errors.tickets ? '<div class="error" style="color:var(--bad); margin-top:12px">' + errors.tickets + "</div>" : "") +
+      '<div style="margin-top:16px"><button class="btn" id="add-ticket">Add ticket type</button></div>' +
+      '<p class="hint small muted" style="margin-top:10px">You can change these later in Ticket types.</p>' +
+      buttonsHtml();
+  }
+
+  function stepPublish(errors) {
+    var seats = 0;
+    draft.tickets.forEach(function (t) { seats += Number(t.qty) || 0; });
+    var bankLinked = getUser(ME).bankLinked !== false;
+    var needsApproval = DB.settings.requireApproval;
+
+    var summary =
+      "<tr><td>Event</td><td>" + esc(draft.title) + "</td></tr>" +
+      "<tr><td>Date</td><td>" + formatDate(draft.date) + ", " + esc(draft.time) + "</td></tr>" +
+      "<tr><td>Venue</td><td>" + esc(draft.venue) + ", " + esc(draft.address) + "</td></tr>" +
+      "<tr><td>Tickets</td><td>" + draft.tickets.length + " types, " + seats.toLocaleString() + " seats</td></tr>";
+
+    var checks =
+      "<tr><td>Details complete</td><td>" + OK_TAG + "</td></tr>" +
+      "<tr><td>Tickets priced</td><td>" + OK_TAG + "</td></tr>" +
+      "<tr><td>Bank account linked</td><td>" + (bankLinked ? OK_TAG : MISSING_TAG) + "</td></tr>";
+
+    return '<table style="margin-bottom:24px"><tr><th>Item</th><th>Detail</th></tr>' + summary + "</table>" +
+      '<table style="margin-bottom:24px"><tr><th>Check</th><th>Status</th></tr>' + checks + "</table>" +
+      '<div class="notice">' + (needsApproval
+        ? "An admin reviews new events before they go live. This usually takes about " + DB.settings.reviewTarget + " hours."
+        : "New events go live straight away.") + "</div>" +
+      (errors.bank ? '<div class="error" style="color:var(--bad); margin-bottom:12px">' + errors.bank + "</div>" : "") +
+      '<div class="step-buttons">' +
+        '<button class="btn" id="back">Back</button>' +
+        "<span>" +
+          '<button class="btn" id="save-draft">Save as draft</button> ' +
+          '<button class="btn primary" id="publish">Publish event</button>' +
+        "</span>" +
+      "</div>";
+  }
+
+  function buttonsHtml() {
+    return '<div class="step-buttons">' +
+      (step > 1 ? '<button class="btn" id="back">Back</button>' : "<span></span>") +
+      '<button class="btn primary" id="next">Continue</button></div>';
+  }
+
+  // ---------- reading what the user typed ----------
+  function readStep() {
+    if (step === 1) {
+      draft.title = document.getElementById("f-title").value.trim();
+      draft.category = document.getElementById("f-category").value;
+      draft.description = document.getElementById("f-description").value.trim();
+    }
+    if (step === 2) {
+      draft.date = document.getElementById("f-date").value;
+      draft.time = document.getElementById("f-time").value;
+      draft.endTime = document.getElementById("f-end").value;
+      draft.venue = document.getElementById("f-venue").value.trim();
+      draft.address = document.getElementById("f-address").value.trim();
+      draft.capacity = document.getElementById("f-capacity").value;
+    }
+    if (step === 3) {
+      document.querySelectorAll("[data-t]").forEach(function (input) {
+        draft.tickets[Number(input.dataset.i)][input.dataset.t] = input.value;
+      });
+    }
+    saveDraft();
+  }
+
+  // ---------- checking it ----------
+  // Returns an object of error messages. Empty object = all good.
+  function validate(whichStep) {
+    var errors = {};
+    if (whichStep === 1) {
+      if (draft.title === "") errors.title = "Please enter an event name.";
+      if (draft.category === "") errors.category = "Please choose a category.";
+      if (draft.description.length < 20) errors.description = "Please write at least 20 characters.";
+    }
+    if (whichStep === 2) {
+      if (draft.date === "") errors.date = "Please choose a date.";
+      else if (draft.date < dateFromToday(0)) errors.date = "The date cannot be in the past.";
+      if (draft.time === "") errors.time = "Please choose a start time.";
+      if (draft.venue === "") errors.venue = "Please enter a venue name.";
+      if (draft.address === "") errors.address = "Please enter an address.";
+      var cap = Number(draft.capacity);
+      if (!cap || cap < 1) errors.capacity = "Enter a capacity of 1 or more.";
+      else if (cap > DB.settings.maxCapacity) errors.capacity = "The platform limit is " + DB.settings.maxCapacity.toLocaleString() + ".";
+    }
+    if (whichStep === 3) {
+      var total = 0;
+      draft.tickets.forEach(function (t) {
+        if (t.name.trim() === "" || t.price === "" || Number(t.price) < 0 || Number(t.qty) < 1) {
+          errors.tickets = "Every ticket type needs a name, a price (0 for free) and a quantity of 1 or more.";
+        }
+        total += Number(t.qty) || 0;
+      });
+      if (!errors.tickets && total > Number(draft.capacity)) {
+        errors.tickets = "Ticket quantities add up to " + total + ", which is more than the capacity of " + draft.capacity + ".";
+      }
+      if (draft.tickets.length > DB.settings.maxTicketTypes) errors.tickets = "You can have at most " + DB.settings.maxTicketTypes + " ticket types.";
+    }
+    return errors;
+  }
+
+  // ---------- buttons ----------
+  function hookButtons() {
+    var back = document.getElementById("back");
+    var next = document.getElementById("next");
+
+    if (back) back.onclick = function () { readStep(); step -= 1; draw(); };
+
+    if (next) next.onclick = function () {
+      readStep();
+      var errors = validate(step);
+      if (Object.keys(errors).length > 0) { draw(errors); return; }
+      step += 1;
+      draw();
+      window.scrollTo(0, 0);
+    };
+
+    if (step === 1) {
+      document.getElementById("f-cover").onchange = function () {
+        draft.cover = this.files.length > 0 ? this.files[0].name : "";
+        document.getElementById("cover-name").textContent = draft.cover || "Upload or drag a file";
+        saveDraft();
+      };
+    }
+
+    if (step === 3) {
+      document.getElementById("add-ticket").onclick = function () {
+        readStep();
+        draft.tickets.push({ name: "", price: "", qty: "" });
+        saveDraft();
+        draw();
+      };
+      onClickAll("[data-remove]", "remove", function (i) {
+        readStep();
+        draft.tickets.splice(Number(i), 1);
+        saveDraft();
+        draw();
+      });
+    }
+
+    if (step === 4) {
+      document.getElementById("save-draft").onclick = function () { createEvent("Draft"); };
+      document.getElementById("publish").onclick = function () {
+        var bankLinked = getUser(ME).bankLinked !== false;
+        if (DB.settings.bankBeforePublish && !bankLinked) {
+          draw({ bank: "Link a bank account before publishing." });
+          return;
+        }
+        createEvent(DB.settings.requireApproval ? "Pending" : "Published");
+      };
+    }
+  }
+
+  // ---------- saving the new event ----------
+  function createEvent(status) {
+    var id = newId("e");
+    var code = "UNT-" + (48400 + DB.events.length);
+    DB.events.push({
+      id: id, code: code, organiserId: ME,
+      title: draft.title, category: draft.category, description: draft.description,
+      date: draft.date, time: draft.time, endTime: draft.endTime, venue: draft.venue, address: draft.address,
+      capacity: Number(draft.capacity), status: status, note: "", views: 0, viewsPrev: 0
+    });
+    draft.tickets.forEach(function (t) {
+      DB.tiers.push({
+        id: newId("t"), eventId: id, name: t.name.trim(), price: Number(t.price), qty: Number(t.qty), sold: 0,
+        salesStart: dateFromToday(0), salesEnd: draft.date, visible: true
+      });
+    });
+    saveDB();
+
+    var action = status === "Draft" ? "Saved draft" : status === "Pending" ? "Submitted event for approval" : "Published event";
+    addAudit(getUser(ME).name, action, draft.title);
+
+    var finished = { title: draft.title, date: draft.date };
+    sessionStorage.removeItem("create-draft");
+    draft = emptyDraft();
+    showDone(id, code, status, finished);
+  }
+
+  // The last screen: "Your event is live"
+  function showDone(id, code, status, finished) {
+    document.getElementById("stepper").innerHTML = "";
+    document.getElementById("crumb").textContent = status === "Published" ? "Published" : status === "Pending" ? "Submitted" : "Saved";
+    document.getElementById("page-title").textContent = status === "Draft" ? "Draft saved" : status === "Pending" ? "Submitted for review" : "Your event is live";
+    document.getElementById("art-text").textContent = "Thank you.";
+
+    var message = {
+      Draft: "Your draft is saved. Finish it any time from My Events.",
+      Pending: "An admin will look at your event soon. It shows as Live in My Events once it is approved.",
+      Published: "Tickets can be bought now."
+    }[status];
+
+    document.getElementById("step-area").innerHTML =
+      '<p style="font-size:18px">' + esc(finished.title) + " &middot; " + formatDate(finished.date) + "</p>" +
+      '<p class="label" style="margin:12px 0 20px">Event ID ' + code + "</p>" +
+      '<div class="notice ok">' + message + "</div>" +
+      '<a class="btn primary" href="event-dashboard.html?id=' + id + '">Go to dashboard</a> ' +
+      '<a class="btn" href="create-event.html">Create another</a>';
+  }
+
+  draw();
+  </script>
+</body>
+</html>
