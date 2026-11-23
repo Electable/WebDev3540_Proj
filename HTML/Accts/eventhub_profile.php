@@ -1,9 +1,22 @@
 <?php
+// ==============================================================
+// FILE: eventhub_profile.php
+// Profile page: view and edit your account.
+// GET shows the page; POST (via AJAX from the page script) validates and saves, returning JSON.
+// Customers also edit billing details; Organizers edit organisation details.
+// Search tags used below: SECTION:, FUNC:, PHP:, CSS:, HTML:, JS:
+// ==============================================================
 require_once __DIR__ . '/config.php';
+
+// --- PHP: guests are redirected to sign-in; $uid / $pdo used throughout ---
 $me  = require_login();
 $uid = (int)$me['UserID'];
 $pdo = db();
 
+// ==============================================================
+// FUNC: load_profile()
+// Loads the user plus their Customers / EventOrganizers row in one query
+// ==============================================================
 function load_profile(PDO $pdo, int $uid): array {
     $st = $pdo->prepare(
         'SELECT u.UserID, u.Username, u.Email, u.Phone, u.City, u.ProfileImg, u.NotificationType, u.Role, u.RecordDateTime,
@@ -17,6 +30,10 @@ function load_profile(PDO $pdo, int $uid): array {
     return $st->fetch();
 }
 
+// ==============================================================
+// FUNC: profile_json()
+// Converts a database row into the array sent to the page script (also builds "Organizer (Verified)" labels)
+// ==============================================================
 function profile_json(array $r): array {
     $acct = $r['Role'];
     if ($r['Role'] === 'Organizer' && $r['VerificationStatus']) $acct .= ' (' . $r['VerificationStatus'] . ')';
@@ -39,14 +56,20 @@ function profile_json(array $r): array {
     ];
 }
 
-/* ---------- Save (AJAX) ---------- */
+// ==============================================================
+// SECTION: SAVE HANDLER (POST, returns JSON)
+// Order: CSRF -> read input -> validate -> uniqueness -> photo -> save in a transaction -> respond
+// ==============================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // --- PHP: JSON response and the $fail() helper that sends errors back and stops ---
     header('Content-Type: application/json');
     $fail = fn(array $errs, string $msg = 'Fix the highlighted fields to save.') =>
         exit(json_encode(['ok' => false, 'errors' => $errs, 'message' => $msg]));
 
+    // --- PHP: security check - reject forged / expired requests ---
     if (!csrf_ok()) { http_response_code(403); $fail([], 'Your session expired. Reload the page and try again.'); }
 
+    // --- PHP: current data, the user's role, and small input helpers ($in trims, $nul turns "" into NULL) ---
     $row  = load_profile($pdo, $uid);
     $role = $row['Role'];
     $in   = fn(string $k) => trim((string)($_POST[$k] ?? ''));
@@ -54,6 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $phoneRe = '/^\d{3}-\d{3}-\d{4}$/';
     $errs = [];
 
+    // --- PHP: shared field validation (all roles) ---
     $username = $in('username'); $email = $in('email'); $phone = $in('phone'); $city = $in('city');
     $notif = $in('notif');
 
@@ -64,6 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errs['city'] = "City can only include letters, spaces, and . ' -";
     if (!in_array($notif, NOTIFICATION_OPTIONS, true)) $notif = $row['NotificationType'];
 
+    // --- PHP: role-specific fields (Customer: billing, Organizer: organisation) ---
     $billing = $postal = $org = $bEmail = $bPhone = $desc = '';
     if ($role === 'Customer') {
         $billing = $in('billingAddress'); $postal = $in('postalCode');
@@ -77,7 +102,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (mb_strlen($desc) > 2000) $errs['description'] = 'Keep the description under 2000 characters.';
     }
 
-    // Username / email must stay unique
+    // --- PHP: uniqueness - username and email must not belong to someone else ---
     if (!isset($errs['username']) || !isset($errs['email'])) {
         $st = $pdo->prepare('SELECT Username, Email FROM Users WHERE (Username = ? OR Email = ?) AND UserID <> ?');
         $st->execute([$username, $email, $uid]);
@@ -87,7 +112,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // Profile photo
+    // --- PHP: profile photo upload - checks size and real image type, saves under a random name ---
     $newImg = $row['ProfileImg']; $savedFile = null;
     if (!empty($_FILES['photo']) && $_FILES['photo']['error'] !== UPLOAD_ERR_NO_FILE) {
         $f = $_FILES['photo'];
@@ -103,8 +128,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    // --- PHP: any errors? undo the uploaded file and send the errors back ---
     if ($errs) { if ($savedFile) @unlink($savedFile); $fail($errs); }
 
+    // --- PHP: save everything in one transaction (update Users, then upsert Customers / EventOrganizers) ---
     try {
         $pdo->beginTransaction();
         $pdo->prepare('UPDATE Users SET Username=?, Email=?, Phone=?, City=?, NotificationType=?, ProfileImg=? WHERE UserID=?')
@@ -128,18 +155,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         throw $ex;
     }
 
-    // Remove the old photo file once the new one is safely saved
+    // --- PHP: tidy up - delete the previous photo file now that the new one is saved ---
     if ($savedFile && $row['ProfileImg'] && str_starts_with($row['ProfileImg'], UPLOAD_URL)) @unlink(__DIR__ . '/' . $row['ProfileImg']);
 
+    // --- PHP: success - return the refreshed profile ---
     echo json_encode(['ok' => true, 'profile' => profile_json(load_profile($pdo, $uid))]);
     exit;
 }
 
+// ==============================================================
+// SECTION: PAGE RENDER (GET)
+// Data for the page; $isCustomer / $isOrganizer pick which extra form section is shown
+// ==============================================================
 $profile = profile_json(load_profile($pdo, $uid));
 $isCustomer  = $profile['role'] === 'Customer';
 $isOrganizer = $profile['role'] === 'Organizer';
 ?>
 <!DOCTYPE html>
+<!-- ==============================================================
+     HTML: PAGE
+     Head (meta, fonts, styles), profile card markup, then the page script
+     ============================================================== -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -149,6 +185,8 @@ $isOrganizer = $profile['role'] === 'Organizer';
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
 <style>
+
+  /* --- CSS: DESIGN TOKENS --- */
   :root {
     --card: #d9d9d9;
     --ink: #111;
@@ -157,8 +195,12 @@ $isOrganizer = $profile['role'] === 'Organizer';
     --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
     --serif: "DM Serif Display", Georgia, "Times New Roman", serif;
   }
+
+  /* --- CSS: BASE / RESET --- */
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
+
+  /* --- CSS: PAGE BACKGROUND (copper stripes) & POSITIONING --- */
   body {
     font-family: var(--sans);
     color: var(--ink);
@@ -177,6 +219,7 @@ $isOrganizer = $profile['role'] === 'Organizer';
     background-color: #e2aa8d;
   }
 
+  /* --- CSS: PROFILE CARD (base size - enlarged further down) --- */
   .card {
     width: 100%;
     max-width: 262px;
@@ -187,7 +230,7 @@ $isOrganizer = $profile['role'] === 'Organizer';
     box-shadow: 0 1px 2px rgba(0,0,0,.08);
   }
 
-  /* back to home link */
+  /* --- CSS: BACK-TO-HOME LINK --- */
   .home-link {
     display: inline-flex;
     align-items: center;
@@ -203,7 +246,7 @@ $isOrganizer = $profile['role'] === 'Organizer';
   .home-link:hover span { text-decoration: underline; }
   .home-link:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 4px; }
 
-  /* header */
+  /* --- CSS: CARD HEADER - avatar, name, account type --- */
   .head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
   .avatar {
     position: relative;
@@ -234,7 +277,7 @@ $isOrganizer = $profile['role'] === 'Organizer';
   .name { font-size: 16px; font-weight: 500; line-height: 1.2; }
   .meta { font-size: 10px; font-style: italic; color: var(--muted); margin-top: 2px; }
 
-  /* fields */
+  /* --- CSS: FORM FIELDS - read-only by default, boxed while editing --- */
   .field { margin-bottom: 8px; }
   label {
     display: block;
@@ -271,7 +314,7 @@ $isOrganizer = $profile['role'] === 'Organizer';
   .invalid { border-bottom-color: var(--error) !important; }
   .err { min-height: 12px; font-size: 9px; color: var(--error); margin-top: 2px; }
 
-  /* buttons */
+  /* --- CSS: BUTTONS & STATUS LINE --- */
   .actions { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; gap: 10px; }
   .btn {
     font-family: var(--serif);
@@ -288,13 +331,17 @@ $isOrganizer = $profile['role'] === 'Organizer';
   .btn-secondary { background: #fff; color: var(--ink); min-width: 56px; }
   .status { font-size: 9px; font-style: italic; color: var(--muted); min-height: 12px; margin-top: 8px; }
 
+  /* --- CSS: RESPONSIVE (base styles) --- */
   @media (max-width: 640px) {
     body { justify-content: center; padding: 24px 16px; }
     .card { max-width: 340px; }
   }
   @media (prefers-reduced-motion: reduce) { .btn { transition: none; } }
 
-/* ---- Larger, centered profile card ---- */
+/* ==============================================================
+   CSS: LARGER CARD OVERRIDES
+   These rules come later, so they override the base sizes above
+   ============================================================== */
 html, body { height: auto; }
 body { justify-content: center; min-height: 100vh; min-height: 100dvh; padding: 48px max(24px, 6vw); }
 
@@ -322,6 +369,7 @@ input, select { font-size: 17px; padding: 10px 0 8px; }
 .btn-secondary { min-width: 100px; }
 .status { font-size: 13px; min-height: 16px; margin-top: 12px; }
 
+/* --- CSS: RESPONSIVE (larger card) --- */
 @media (max-width: 640px) {
   body { padding: 32px 24px; }
   .card { padding: 28px 22px 24px; }
@@ -331,6 +379,9 @@ input, select { font-size: 17px; padding: 10px 0 8px; }
   input, select { font-size: 16px; } /* 16px stops iOS zooming into fields */
 }
 
+/* ==============================================================
+   CSS: TEXTAREA (organisation description) & SECTION TITLES
+   ============================================================== */
 textarea{width:100%;font:inherit;font-size:17px;color:var(--ink);background:transparent;border:0;border-bottom:1px solid var(--ink);border-radius:0;padding:10px 0 8px;resize:vertical;min-height:84px}
 textarea:read-only{cursor:default;resize:none}
 .editing textarea:not(:read-only){background:rgba(255,255,255,.55);padding-left:12px;padding-right:12px;border-bottom-width:2px}
@@ -340,12 +391,18 @@ textarea::placeholder{color:#777}
 </style>
 </head>
 <body>
+
+  <!-- ==============================================================
+       HTML: PROFILE CARD
+       Back link, header (avatar + name), editable form, hidden logout form
+       ============================================================== -->
   <main class="card" id="card">
     <a class="home-link" href="eventhub_landing.php">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
       <span>Back to home</span>
     </a>
 
+    <!-- --- HTML: header - avatar button (click to change photo while editing) and account info --- -->
     <div class="head">
       <button class="avatar" id="avatar" type="button" aria-label="Profile picture">
         <span id="initial">U</span>
@@ -358,6 +415,7 @@ textarea::placeholder{color:#777}
       </div>
     </div>
 
+    <!-- --- HTML: PROFILE FIELDS — Read-only until "Edit Information" is clicked. Fields are tied to the script via data-field. --- -->
     <form id="form" novalidate>
       <div class="field">
         <label for="usernameInput">Username</label>
@@ -392,6 +450,7 @@ textarea::placeholder{color:#777}
         </select>
       </div>
 
+<?php /* --- PHP: CUSTOMER only - billing section --- */ ?>
 <?php if ($isCustomer): ?>
       <div class="section-title">Billing</div>
       <div class="field">
@@ -404,6 +463,8 @@ textarea::placeholder{color:#777}
         <input id="postalCode" data-field="postalCode" type="text" autocomplete="postal-code" placeholder="Postal code" maxlength="20" readonly>
         <div class="err" id="postalCodeErr" role="alert"></div>
       </div>
+
+<?php /* --- PHP: ORGANIZER only - organisation section --- */ ?>
 <?php elseif ($isOrganizer): ?>
       <div class="section-title">Organisation</div>
       <div class="field">
@@ -428,6 +489,7 @@ textarea::placeholder{color:#777}
       </div>
 <?php endif; ?>
 
+      <!-- --- HTML: action buttons and status message --- -->
       <div class="actions">
         <button class="btn btn-primary" id="editBtn" type="button">Edit Information</button>
         <button class="btn btn-secondary" id="signOut" type="button">Sign Out</button>
@@ -435,15 +497,26 @@ textarea::placeholder{color:#777}
       <div class="status" id="status" role="status" aria-live="polite"></div>
     </form>
 
+    <!-- --- HTML: hidden form used by the Sign Out button (POST + CSRF) --- -->
     <form id="logoutForm" method="post" action="logout.php" hidden>
       <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
     </form>
   </main>
 
+<!-- ==============================================================
+     JS: PAGE SCRIPT
+     Sections: state, rendering, formatting & validation, edit/save, photo, sign out
+     ============================================================== -->
 <script>
+
+  // ==============================================================
+  // JS: STATE & ELEMENT REFERENCES
+  // profile = data from PHP; CSRF = token for saving; fields = every [data-field] input
+  // ==============================================================
   let profile = <?= json_encode($profile, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?>;
   const CSRF = <?= json_encode(csrf_token()) ?>;
 
+  // --- FUNC $(): shortcut for document.getElementById ---
   const $ = id => document.getElementById(id);
   const card = $("card"), editBtn = $("editBtn"), status = $("status");
   const fields = {};
@@ -453,7 +526,11 @@ textarea::placeholder{color:#777}
   let pendingPhoto = profile.photo;   // what the avatar shows
   let pendingFile = null;             // newly chosen file to upload
 
-  // ---- Rendering ----
+  // ==============================================================
+  // JS: RENDERING
+  // ==============================================================
+
+  // --- FUNC renderAvatar(): shows the photo, or the first letter of the username when there is none ---
   function renderAvatar(src) {
     const existing = avatar.querySelector("img");
     if (existing) existing.remove();
@@ -464,6 +541,8 @@ textarea::placeholder{color:#777}
       avatar.insertBefore(img, avatar.firstChild);
     }
   }
+
+  // --- FUNC load(): copies the profile data into the page (name, fields, avatar) ---
   function load() {
     $("username").textContent = profile.username;
     $("acctType").textContent = profile.acctType;
@@ -475,15 +554,23 @@ textarea::placeholder{color:#777}
     renderAvatar(profile.photo);
   }
 
-  // ---- Formatting & validation (the server re-checks everything) ----
+  // ==============================================================
+  // JS: FORMATTING & VALIDATION
+  // Instant feedback only; the server re-checks everything
+  // ==============================================================
+
+  // --- FUNC formatPhone(): turns digits into xxx-xxx-xxxx as the user types ---
   function formatPhone(v) {
     const d = v.replace(/\D/g, "").slice(0, 10);
     if (d.length > 6) return d.slice(0,3) + "-" + d.slice(3,6) + "-" + d.slice(6);
     if (d.length > 3) return d.slice(0,3) + "-" + d.slice(3);
     return d;
   }
+
+  // --- JS: apply phone formatting to both phone inputs ---
   ["phone", "businessPhone"].forEach(k => fields[k] && fields[k].addEventListener("input", e => { e.target.value = formatPhone(e.target.value); }));
 
+  // --- JS: VALIDATION RULES - one rule per field, each returns an error message or "" ---
   const emailOk = v => v === "" || /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
   const phoneOk = v => v === "" || /^\d{3}-\d{3}-\d{4}$/.test(v) ? "" : "Enter a phone number as xxx-xxx-xxxx.";
   const rules = {
@@ -498,20 +585,30 @@ textarea::placeholder{color:#777}
     businessPhone: phoneOk,
     description: v => v.length <= 2000 ? "" : "Keep the description under 2000 characters."
   };
+
+  // --- FUNC showError(): writes / clears the message under a field and marks it invalid ---
   function showError(key, msg) {
     const input = fields[key]; if (!input) return;
     $(key === "username" ? "usernameErr" : key + "Err").textContent = msg;
     input.classList.toggle("invalid", !!msg);
     input.setAttribute("aria-invalid", msg ? "true" : "false");
   }
+
+  // --- FUNC validate(): runs the rule for one field, returns true if OK ---
   function validate(key) {
     const msg = rules[key](fields[key].value.trim());
     showError(key, msg);
     return !msg;
   }
+
+  // --- JS: validate a field when the user leaves it (editing only) ---
   Object.keys(fields).forEach(k => fields[k].addEventListener("blur", () => editing && validate(k)));
 
-  // ---- Edit / save state ----
+  // ==============================================================
+  // JS: EDIT / SAVE
+  // ==============================================================
+
+  // --- FUNC setEditing(): switches between read-only and edit mode ---
   function setEditing(on) {
     editing = on;
     card.classList.toggle("editing", on);
@@ -522,6 +619,7 @@ textarea::placeholder{color:#777}
     if (on) { status.textContent = ""; fields.username.focus(); }
   }
 
+  // --- JS: Edit/Save button - first click enters edit mode; second click validates, sends the form to the server and shows the result ---
   editBtn.addEventListener("click", async () => {
     if (!editing) return setEditing(true);
     const ok = Object.keys(fields).map(validate).every(Boolean);
@@ -553,7 +651,10 @@ textarea::placeholder{color:#777}
     }
   });
 
-  // ---- Profile picture (only while editing) ----
+  // ==============================================================
+  // JS: PROFILE PICTURE
+  // Only while editing; the file uploads together with Save
+  // ==============================================================
   avatar.addEventListener("click", () => { if (editing) photoInput.click(); });
   photoInput.addEventListener("change", () => {
     const file = photoInput.files[0];
@@ -566,9 +667,12 @@ textarea::placeholder{color:#777}
     photoInput.value = "";
   });
 
-  // ---- Sign out ----
+  // ==============================================================
+  // JS: SIGN OUT
+  // ==============================================================
   $("signOut").addEventListener("click", () => $("logoutForm").submit());
 
+  // --- JS: INITIAL RENDER - fill the page when it opens ---
   load();
 </script>
 </body>

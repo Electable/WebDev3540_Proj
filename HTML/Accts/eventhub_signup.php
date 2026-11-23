@@ -1,24 +1,44 @@
 <?php
+// ==============================================================
+// FILE: eventhub_signup.php
+// Sign-up page: shows the form (GET) and creates the account (POST).
+// Creates a Users row plus a Customers or EventOrganizers row in one transaction.
+// Search tags used below: SECTION:, PHP:, CSS:, HTML:
+// ==============================================================
 require_once __DIR__ . '/config.php';
+
+// --- PHP: already signed in? Skip this page and go home ---
 if (current_user()) redirect('eventhub_landing.php');
 
+// ==============================================================
+// SECTION: PAGE STATE
+// $errors = per-field error messages (and a general "form" error)
+// $old    = values re-filled after a failed attempt
+// ==============================================================
 $errors = ['form' => '', 'email' => '', 'username' => '', 'password' => ''];
 $old    = ['email' => '', 'username' => '', 'role' => 'customer'];
 
+// ==============================================================
+// SECTION: HANDLE SIGN-UP FORM (POST)
+// Order: read input -> CSRF -> validate -> duplicate check -> create account
+// ==============================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // --- PHP: read and clean the submitted values ---
     $old['email']    = trim((string)($_POST['email'] ?? ''));
     $old['username'] = trim((string)($_POST['username'] ?? ''));
     $old['role']     = ($_POST['role'] ?? '') === 'organiser' ? 'organiser' : 'customer';
     $password        = (string)($_POST['password'] ?? '');
 
+    // --- PHP: security check - reject forged / expired forms ---
     if (!csrf_ok()) {
         $errors['form'] = 'Your session expired. Please try again.';
     } else {
+        // --- PHP: format validation (helpers live in config.php) ---
         if (!valid_email($old['email']))           $errors['email']    = 'Enter a valid email address.';
         if ($m = valid_username($old['username'])) $errors['username'] = $m;
         if ($m = valid_password($password))        $errors['password'] = $m;
 
-        // Does an account already exist?
+        // --- PHP: duplicate check - is the email or username already taken? ---
         if (!$errors['email'] || !$errors['username']) {
             $st = db()->prepare('SELECT Email, Username FROM Users WHERE Email = ? OR Username = ?');
             $st->execute([$old['email'], $old['username']]);
@@ -30,24 +50,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
+        // ==============================================================
+        // SECTION: CREATE THE ACCOUNT
+        // Only runs when there are no errors at all
+        // ==============================================================
         if (!array_filter($errors)) {
             $pdo  = db();
             $role = $old['role'] === 'organiser' ? 'Organizer' : 'Customer';
             try {
+                // --- PHP: transaction - either every row is saved or none are ---
                 $pdo->beginTransaction();
                 $pdo->prepare('INSERT INTO Users (Username, Email, PasswordHash, Role, RecordDateTime) VALUES (?, ?, ?, ?, NOW())')
                     ->execute([$old['username'], $old['email'], password_hash($password, PASSWORD_DEFAULT), $role]);
                 $uid = (int)$pdo->lastInsertId();
                 $pdo->prepare('UPDATE Users SET CreatedBy = ? WHERE UserID = ?')->execute([$uid, $uid]);
 
+                // --- PHP: create the role-specific row (Customers or EventOrganizers) ---
                 if ($role === 'Customer') {
                     $pdo->prepare('INSERT INTO Customers (UserID, RecordDateTime, CreatedBy) VALUES (?, NOW(), ?)')->execute([$uid, $uid]);
                 } else {
                     $pdo->prepare('INSERT INTO EventOrganizers (UserID, RecordDateTime, CreatedBy) VALUES (?, NOW(), ?)')->execute([$uid, $uid]);
                 }
                 $pdo->commit();
+
+                // --- PHP: success - sign the new user in and go home ---
                 log_in(['UserID' => $uid]);
             } catch (PDOException $ex) {
+            // --- PHP: database error (code 23000 = duplicate; someone else grabbed the email/username first) ---
                 if ($pdo->inTransaction()) $pdo->rollBack();
                 if ($ex->getCode() === '23000') {   // lost a race with another signup
                     $errors['form'] = 'An account with that email or username already exists.';
@@ -60,6 +89,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 ?>
 <!DOCTYPE html>
+<!-- ==============================================================
+     HTML: PAGE
+     Everything below is the browser-side page (head, styles, markup)
+     ============================================================== -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -69,8 +102,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Gloock&display=swap" rel="stylesheet">
   <style>
+
+    /* --- CSS: BASE / RESET --- */
     * { box-sizing: border-box; }
 
+    /* --- CSS: DESIGN TOKENS --- */
     :root {
       --ink: #050505;
       --line: #b9b9b9;
@@ -78,6 +114,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       --selected: #b7b7b7;
     }
 
+    /* --- CSS: PAGE BACKGROUND & FONT --- */
     body {
       margin: 0;
       min-height: 100vh;
@@ -86,6 +123,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       font-family: "Gloock", Georgia, serif;
     }
 
+    /* ==============================================================
+       CSS: PAGE LAYOUT
+       Two columns: form (left) and artwork (right)
+       ============================================================== */
     .page {
       width: min(100% - 48px, 802px);
       min-height: 100vh;
@@ -97,6 +138,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       padding-top: 67px;
     }
 
+    /* --- CSS: FORM COLUMN (brand, heading, subtitle) --- */
     .left-panel {
       width: 100%;
       padding-top: 21px;
@@ -125,6 +167,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       white-space: nowrap;
     }
 
+    /* --- CSS: FORM FIELDS --- */
     .field {
       margin-bottom: 13px;
     }
@@ -152,6 +195,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       box-shadow: 0 0 0 2px rgba(0,0,0,.06);
     }
 
+    /* --- CSS: ROLE PICKER (Customer / Event Organiser toggle buttons) --- */
     .role-picker {
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -202,6 +246,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       outline-offset: 2px;
     }
 
+    /* --- CSS: BUTTONS (primary = Sign Up, google = Continue with Google) --- */
     .action {
       width: 100%;
       height: 35px;
@@ -223,6 +268,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       border: 1px solid var(--line);
     }
 
+    /* --- CSS: "Already have an account?" link --- */
     .account-link {
       display: block;
       width: fit-content;
@@ -233,6 +279,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       text-underline-offset: 1px;
     }
 
+    /* --- CSS: ARTWORK PANEL (right column) --- */
     .visual-panel {
       width: 424px;
       height: 522px;
@@ -268,6 +315,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       opacity: .8;
     }
 
+    /* --- CSS: RESPONSIVE - tablet / phone layouts --- */
     @media (max-width: 900px) {
       .page {
         width: min(100% - 40px, 520px);
@@ -294,6 +342,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       .page { width: min(100% - 36px, 360px); }
       .visual-panel { height: 260px; }
     }
+
+  /* --- CSS: VALIDATION MESSAGES --- */
   .field .fe{margin:3px 0 0;font-size:9px;line-height:12px;color:#b3261e}
 .fe:empty{display:none}
 .form-error{margin:0 0 12px;font-size:10px;color:#b3261e}
@@ -302,12 +352,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </style>
 </head>
 <body>
+
+  <!-- ==============================================================
+       HTML: PAGE CONTENT
+       Left: sign-up form. Right: decorative panel.
+       ============================================================== -->
   <main class="page">
     <section class="left-panel" aria-label="Create an EventHub account">
       <a class="brand" href="eventhub_landing.php" style="display:block;color:inherit;text-decoration:none">EventHub</a>
       <h1>Welcome to EventHub</h1>
       <p class="subtitle">Tickets, Orders, and Events in One Place</p>
 
+      <!-- --- HTML: SIGN-UP FORM — Posts to this same file. The hidden csrf field is required. --- -->
       <form id="signup-form" method="post" action="eventhub_signup.php" novalidate>
         <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
         <?php if ($errors['form']): ?><p class="form-error" role="alert"><?= e($errors['form']) ?></p><?php endif; ?>
@@ -330,6 +386,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           <p class="fe" role="alert"><?= e($errors['password']) ?></p>
         </div>
 
+        <!-- --- HTML: role choice (customer or organiser) - decides which extra table gets a row --- -->
         <fieldset class="role-picker">
           <legend class="role-title">I am signing up as ....</legend>
           <div class="role-options">
@@ -340,12 +397,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           </div>
         </fieldset>
 
+        <!-- --- HTML: submit + alternative actions --- -->
         <button class="action primary" type="submit">Sign Up</button>
         <button class="action google" type="button" id="google-signin" title="Google sign-in isn't connected yet">Continue with Google</button>
         <a class="account-link" href="eventhub_signIn.php" id="MovetoLoginBtn">Already have an Account?</a>
       </form>
     </section>
 
+    <!-- --- HTML: ARTWORK PANEL (decorative) --- -->
     <div class="visual-panel" role="img" aria-label="Warm peach vertical striped abstract texture"></div>
   </main>
 </body>

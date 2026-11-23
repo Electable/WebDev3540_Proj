@@ -1,13 +1,28 @@
 <?php
+// ==============================================================
+// FILE: eventhub_passReset.php
+// Two-step password reset.
+// Step 1 (form POST): checks the request, stores the NEW password hashed with a one-hour token, emails a link.
+// Step 2 (?token=... in the link): applies the stored password, so only the real email owner can change it.
+// Search tags used below: SECTION:, PHP:, CSS:, HTML:, JS:
+// ==============================================================
 require_once __DIR__ . '/config.php';
 
+// ==============================================================
+// SECTION: PAGE STATE
+// $errors  = per-field messages | $status = banner message | $bad = status is an error
+// $devLink = reset link shown on screen in DEV_MODE | $old = identity re-filled in the form
+// ==============================================================
 $errors  = ['identity' => '', 'password' => '', 'confirm' => ''];
 $status  = '';
 $bad     = false;
 $devLink = '';
 $old     = '';
 
-/* Step 2: the person clicked the emailed link -> apply the new password */
+// ==============================================================
+// SECTION: STEP 2 - CONFIRM VIA EMAILED LINK (GET ?token=...)
+// Valid, unused, unexpired token -> apply the new password and go to sign-in
+// ==============================================================
 if (isset($_GET['token'])) {
     $hash = hash('sha256', (string)$_GET['token']);
     $st = db()->prepare('SELECT ResetID, UserID, NewPasswordHash FROM PasswordResets WHERE TokenHash = ? AND UsedAt IS NULL AND ExpiresAt > NOW()');
@@ -25,20 +40,27 @@ if (isset($_GET['token'])) {
     $bad = true;
 }
 
-/* Step 1: the form */
+// ==============================================================
+// SECTION: STEP 1 - REQUEST FORM (POST)
+// Order: read input -> CSRF -> validate -> store request -> email link
+// ==============================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // --- PHP: read the submitted values ---
     $old = trim((string)($_POST['identity'] ?? ''));
     $pw  = (string)($_POST['password'] ?? '');
     $cf  = (string)($_POST['confirm'] ?? '');
 
+    // --- PHP: security check - reject forged / expired forms ---
     if (!csrf_ok()) {
         $status = 'Your session expired. Please try again.'; $bad = true;
     } else {
+        // --- PHP: field validation ---
         if ($old === '') $errors['identity'] = 'Enter your email or username.';
         if ($m = valid_password($pw)) $errors['password'] = $m === 'Enter a password.' ? 'Enter a new password.' : $m;
         if ($cf === '') $errors['confirm'] = 'Confirm your new password.';
         elseif ($cf !== $pw) $errors['confirm'] = "Passwords don't match.";
 
+        // --- PHP: no errors - create the reset request (only if the account exists and is active) ---
         if (!array_filter($errors)) {
             $u = find_user_by_identity($old);
             if ($u && $u['IsActive']) {
@@ -48,6 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->prepare('INSERT INTO PasswordResets (UserID, TokenHash, NewPasswordHash, ExpiresAt, RecordDateTime) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR), NOW())')
                     ->execute([$u['UserID'], hash('sha256', $token), password_hash($pw, PASSWORD_DEFAULT)]);
 
+                // --- PHP: build the confirmation link and email it ---
                 $link = site_url() . '/eventhub_passReset.php?token=' . $token;
                 $sent = @mail($u['Email'], 'Confirm your EventHub password change',
                     "Hi {$u['Username']},\n\nWe got a request to change your EventHub password. Confirm it here (valid for 1 hour):\n\n$link\n\nIf this wasn't you, ignore this email and your password stays the same.",
@@ -63,6 +86,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 ?>
 <!DOCTYPE html>
+<!-- ==============================================================
+     HTML: PAGE
+     Everything below is the browser-side page (head, styles, markup, script)
+     ============================================================== -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -72,6 +99,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&family=Inter:wght@300;400&display=swap" rel="stylesheet">
 <style>
+
+  /* --- CSS: DESIGN TOKENS --- */
   :root {
     --page-bg: #ffffff;
     --panel-bg: #f2f2f2;
@@ -83,10 +112,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     --sans: "Inter", Arial, sans-serif;
   }
 
+  /* --- CSS: BASE / RESET --- */
   * { box-sizing: border-box; }
 
   html, body { margin: 0; min-height: 100%; background: var(--page-bg); }
 
+  /* --- CSS: PAGE BACKGROUND & CENTRING --- */
   body {
     font-family: var(--serif);
     color: var(--ink);
@@ -97,6 +128,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     padding: 32px;
   }
 
+  /* ==============================================================
+     CSS: PAGE FRAME
+     Two panels side by side: artwork (left) and form (right)
+     ============================================================== */
   .frame {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -106,7 +141,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     min-height: 620px;
   }
 
-  /* ---------- Left image panel ---------- */
+  /* --- CSS: LEFT PANEL - artwork --- */
   .visual {
     position: relative;
     border-radius: 20px;
@@ -143,7 +178,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     color: rgba(255,255,255,.88);
   }
 
-  /* ---------- Right form panel ---------- */
+  /* --- CSS: RIGHT PANEL - form container, brand link, heading --- */
   .panel {
     background: var(--panel-bg);
     border-radius: 14px;
@@ -179,6 +214,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     line-height: 1.1;
   }
 
+  /* --- CSS: FORM FIELDS (label, input, show/hide toggle, error text) --- */
   .field { margin-bottom: 22px; }
 
   label {
@@ -235,6 +271,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   }
   .error:empty { display: none; }
 
+  /* --- CSS: SUBMIT BUTTON --- */
   .btn {
     display: block;
     width: 100%;
@@ -253,6 +290,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   .btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
   .btn:disabled { opacity: .6; cursor: default; }
 
+  /* --- CSS: STATUS MESSAGE & "Return to Sign In" link --- */
   .status {
     margin: 14px 0 0;
     text-align: center;
@@ -273,7 +311,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   .back:hover { text-decoration-thickness: 2px; }
   .back:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 
-  /* ---------- Responsive ---------- */
+  /* --- CSS: RESPONSIVE - stack panels on small screens --- */
   @media (max-width: 820px) {
     body { padding: 16px; align-items: flex-start; }
     .frame { grid-template-columns: 1fr; min-height: 0; }
@@ -285,12 +323,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }
+
+/* --- CSS: ERROR STATUS COLOUR & DEV-MODE LINK BOX --- */
 .status.bad{color:var(--error)}
 .devlink{margin:14px 0 0;padding:10px 12px;border-radius:8px;background:#fff7e0;border:1px solid #e6cf85;font:400 11px var(--sans);word-break:break-all}
 </style>
 </head>
 <body>
 
+<!-- ==============================================================
+     HTML: PAGE CONTENT
+     Left: decorative artwork. Right: reset form.
+     ============================================================== -->
 <main class="frame">
   <aside class="visual" aria-hidden="true">
     <p>Tickets for every kind of night.</p>
@@ -302,6 +346,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="form-wrap">
       <h1>Reset Password</h1>
 
+      <!-- --- HTML: RESET FORM — Three fields: identity, new password, confirmation (plus hidden csrf) --- -->
       <form id="reset-form" method="post" action="eventhub_passReset.php" novalidate>
         <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
 
@@ -329,8 +374,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           <p class="error" id="confirm-error" role="alert"><?= e($errors['confirm']) ?></p>
         </div>
 
+        <!-- --- HTML: submit button + status banner --- -->
         <button class="btn" id="submit-btn" type="submit">Reset Password</button>
         <p class="status<?= $bad ? ' bad' : '' ?>" id="status" role="status"><?= e($status) ?></p>
+
+        <!-- --- HTML: DEV MODE ONLY - shows the confirm link instead of waiting for email --- -->
         <?php if ($devLink): ?>
           <p class="devlink"><strong>Dev mode:</strong> <a href="<?= e($devLink) ?>"><?= e($devLink) ?></a></p>
         <?php endif; ?>
@@ -341,8 +389,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   </section>
 </main>
 
+<!-- ==============================================================
+     JS: BROWSER-SIDE BEHAVIOUR
+     Show/hide password and instant validation. The server re-checks everything.
+     ============================================================== -->
 <script>
-  /* Show / hide password */
+
+  // --- JS: SHOW / HIDE PASSWORD buttons ---
   document.querySelectorAll(".toggle").forEach(btn => {
     btn.addEventListener("click", () => {
       const input = document.getElementById(btn.dataset.target);
@@ -354,7 +407,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     });
   });
 
-  /* Quick client-side check for instant feedback; the server re-checks everything. */
+  // --- JS: INSTANT VALIDATION (references to the form elements) ---
   const form = document.getElementById("reset-form");
   const identity = document.getElementById("identity");
   const password = document.getElementById("password");
@@ -362,11 +415,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   const statusEl = document.getElementById("status");
   const submitBtn = document.getElementById("submit-btn");
 
+  // --- FUNC setError(): writes (or clears) the message under one input ---
   function setError(input, message) {
     document.getElementById(input.id + "-error").textContent = message;
     input.setAttribute("aria-invalid", message ? "true" : "false");
   }
 
+  // --- FUNC validate(): checks all three fields, returns the first invalid input ---
   function validate() {
     let firstBad = null;
     const id = identity.value.trim(), pw = password.value;
@@ -387,12 +442,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     return firstBad;
   }
 
+  // --- JS: re-validate while typing (only after a field has been marked invalid) ---
   [identity, password, confirmField].forEach(input =>
     input.addEventListener("input", () => {
       if (input.getAttribute("aria-invalid") === "true") validate();
     })
   );
 
+  // --- JS: block submit if invalid, otherwise disable the button to prevent double-sends ---
   form.addEventListener("submit", e => {
     const bad = validate();
     if (bad) { e.preventDefault(); bad.focus(); return; }
