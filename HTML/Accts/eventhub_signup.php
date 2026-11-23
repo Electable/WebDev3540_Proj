@@ -1,3 +1,64 @@
+<?php
+require_once __DIR__ . '/config.php';
+if (current_user()) redirect('eventhub_landing.php');
+
+$errors = ['form' => '', 'email' => '', 'username' => '', 'password' => ''];
+$old    = ['email' => '', 'username' => '', 'role' => 'customer'];
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $old['email']    = trim((string)($_POST['email'] ?? ''));
+    $old['username'] = trim((string)($_POST['username'] ?? ''));
+    $old['role']     = ($_POST['role'] ?? '') === 'organiser' ? 'organiser' : 'customer';
+    $password        = (string)($_POST['password'] ?? '');
+
+    if (!csrf_ok()) {
+        $errors['form'] = 'Your session expired. Please try again.';
+    } else {
+        if (!valid_email($old['email']))           $errors['email']    = 'Enter a valid email address.';
+        if ($m = valid_username($old['username'])) $errors['username'] = $m;
+        if ($m = valid_password($password))        $errors['password'] = $m;
+
+        // Does an account already exist?
+        if (!$errors['email'] || !$errors['username']) {
+            $st = db()->prepare('SELECT Email, Username FROM Users WHERE Email = ? OR Username = ?');
+            $st->execute([$old['email'], $old['username']]);
+            foreach ($st->fetchAll() as $row) {
+                if (strcasecmp($row['Email'], $old['email']) === 0)
+                    $errors['email'] = 'An account with this email already exists. Try signing in instead.';
+                if (strcasecmp($row['Username'], $old['username']) === 0)
+                    $errors['username'] = 'That username is taken. Pick another.';
+            }
+        }
+
+        if (!array_filter($errors)) {
+            $pdo  = db();
+            $role = $old['role'] === 'organiser' ? 'Organizer' : 'Customer';
+            try {
+                $pdo->beginTransaction();
+                $pdo->prepare('INSERT INTO Users (Username, Email, PasswordHash, Role, RecordDateTime) VALUES (?, ?, ?, ?, NOW())')
+                    ->execute([$old['username'], $old['email'], password_hash($password, PASSWORD_DEFAULT), $role]);
+                $uid = (int)$pdo->lastInsertId();
+                $pdo->prepare('UPDATE Users SET CreatedBy = ? WHERE UserID = ?')->execute([$uid, $uid]);
+
+                if ($role === 'Customer') {
+                    $pdo->prepare('INSERT INTO Customers (UserID, RecordDateTime, CreatedBy) VALUES (?, NOW(), ?)')->execute([$uid, $uid]);
+                } else {
+                    $pdo->prepare('INSERT INTO EventOrganizers (UserID, RecordDateTime, CreatedBy) VALUES (?, NOW(), ?)')->execute([$uid, $uid]);
+                }
+                $pdo->commit();
+                log_in(['UserID' => $uid]);
+            } catch (PDOException $ex) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                if ($ex->getCode() === '23000') {   // lost a race with another signup
+                    $errors['form'] = 'An account with that email or username already exists.';
+                } else {
+                    throw $ex;
+                }
+            }
+        }
+    }
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -233,78 +294,59 @@
       .page { width: min(100% - 36px, 360px); }
       .visual-panel { height: 260px; }
     }
-  </style>
+  .field .fe{margin:3px 0 0;font-size:9px;line-height:12px;color:#b3261e}
+.fe:empty{display:none}
+.form-error{margin:0 0 12px;font-size:10px;color:#b3261e}
+.field input[aria-invalid="true"]{border-color:#b3261e}
+.role-picker{min-width:0}
+</style>
 </head>
 <body>
   <main class="page">
     <section class="left-panel" aria-label="Create an EventHub account">
-      <div class="brand">EventHub</div>
+      <a class="brand" href="eventhub_landing.php" style="display:block;color:inherit;text-decoration:none">EventHub</a>
       <h1>Welcome to EventHub</h1>
       <p class="subtitle">Tickets, Orders, and Events in One Place</p>
 
-      <form id="signup-form">
+      <form id="signup-form" method="post" action="eventhub_signup.php" novalidate>
+        <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
+        <?php if ($errors['form']): ?><p class="form-error" role="alert"><?= e($errors['form']) ?></p><?php endif; ?>
+
         <div class="field">
           <label for="email">Email</label>
-          <input id="email" name="email" type="text" autocomplete="username" />
+          <input id="email" name="email" type="email" autocomplete="email" value="<?= e($old['email']) ?>"<?= $errors['email'] ? ' aria-invalid="true"' : '' ?> />
+          <p class="fe" role="alert"><?= e($errors['email']) ?></p>
+        </div>
+
+        <div class="field">
+          <label for="username">Username</label>
+          <input id="username" name="username" type="text" autocomplete="username" maxlength="50" value="<?= e($old['username']) ?>"<?= $errors['username'] ? ' aria-invalid="true"' : '' ?> />
+          <p class="fe" role="alert"><?= e($errors['username']) ?></p>
         </div>
 
         <div class="field">
           <label for="password">Password</label>
-          <input id="password" name="password" type="password" autocomplete="new-password" />
+          <input id="password" name="password" type="password" autocomplete="new-password"<?= $errors['password'] ? ' aria-invalid="true"' : '' ?> />
+          <p class="fe" role="alert"><?= e($errors['password']) ?></p>
         </div>
 
         <fieldset class="role-picker">
           <legend class="role-title">I am signing up as ....</legend>
           <div class="role-options">
-            <input type="radio" id="customer" name="role" value="customer" checked />
+            <input type="radio" id="customer" name="role" value="customer"<?= $old['role'] === 'customer' ? ' checked' : '' ?> />
             <label for="customer">Customer</label>
-            <input type="radio" id="organiser" name="role" value="organiser" />
+            <input type="radio" id="organiser" name="role" value="organiser"<?= $old['role'] === 'organiser' ? ' checked' : '' ?> />
             <label for="organiser">Event Organiser</label>
           </div>
         </fieldset>
 
         <button class="action primary" type="submit">Sign Up</button>
-        <button class="action google" type="button" id="google-signin">Continue with Google</button>
-        <a class="account-link" href="#" id="MovetoLoginBtn">Already have an Account?</a>
+        <button class="action google" type="button" id="google-signin" title="Google sign-in isn't connected yet">Continue with Google</button>
+        <a class="account-link" href="eventhub_signIn.php" id="MovetoLoginBtn">Already have an Account?</a>
       </form>
     </section>
 
     <div class="visual-panel" role="img" aria-label="Warm peach vertical striped abstract texture"></div>
   </main>
-
-  <script>
-  const AUTH_KEY = 'eventhub_user';
-
-  function signIn(user) {
-    try { localStorage.setItem(AUTH_KEY, JSON.stringify(user)); } catch {}
-    window.location.href = 'eventhub_landing.html';
-  }
-
-  document.getElementById('MovetoLoginBtn').addEventListener('click', e => {
-    e.preventDefault();
-    window.location.href = 'eventhub_signIn.html';
-  });
-
-  document.getElementById('signup-form').addEventListener('submit', e => {
-    e.preventDefault();
-    const id = document.getElementById('email').value.trim();
-    const password = document.getElementById('password').value;
-    const role = document.querySelector('input[name="role"]:checked').value;
-
-    if (!id || !password) return;   // swap in real validation and error messages
-
-    // TODO: create the account with your auth service first, and only call signIn() if it succeeds.
-    signIn({
-      name: id.includes('@') ? id.split('@')[0] : id,
-      email: id.includes('@') ? id : '',
-      role,
-      photo: ''
-    });
-  });
-
-  document.getElementById('google-signin').addEventListener('click', () => {
-    // Add your Google OAuth flow here, then call signIn({ name, email, role: 'customer', photo }).
-  });
-</script>
 </body>
 </html>

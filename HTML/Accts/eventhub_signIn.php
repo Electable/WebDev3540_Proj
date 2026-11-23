@@ -1,3 +1,40 @@
+<?php
+require_once __DIR__ . '/config.php';
+if (current_user()) redirect('eventhub_landing.php');
+
+$flash  = flash_get();
+$errors = ['identity' => '', 'password' => ''];
+$old    = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $old = trim((string)($_POST['identity'] ?? ''));
+    $pw  = (string)($_POST['password'] ?? '');
+
+    if (!csrf_ok()) {
+        $errors['identity'] = 'Your session expired. Please try again.';
+    } else {
+        if ($old === '') $errors['identity'] = 'Enter your email or username.';
+        if ($pw === '')  $errors['password'] = 'Enter your password.';
+
+        if (!$errors['identity'] && !$errors['password']) {
+            $u = find_user_by_identity($old);
+            if (!$u) {
+                $errors['identity'] = 'No account found with that email or username.';
+            } elseif (!password_verify($pw, $u['PasswordHash'])) {
+                $errors['password'] = 'Incorrect password. Try again or reset it.';
+            } elseif (!$u['IsActive']) {
+                $errors['identity'] = 'This account has been deactivated.';
+            } else {
+                if (password_needs_rehash($u['PasswordHash'], PASSWORD_DEFAULT)) {
+                    db()->prepare('UPDATE Users SET PasswordHash = ? WHERE UserID = ?')
+                        ->execute([password_hash($pw, PASSWORD_DEFAULT), $u['UserID']]);
+                }
+                log_in($u);
+            }
+        }
+    }
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -38,88 +75,43 @@ input:focus{border-color:#000;box-shadow:0 0 0 3px rgba(0,0,0,.1)}
   .logo{margin-bottom:32px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+.fe{margin:5px 0 0;font:500 11px Georgia,serif;color:#b3261e}
+.fe:empty{display:none}
+.msg{margin:-20px 0 22px;padding:9px 12px;border-radius:9px;font:500 12px Georgia,serif;background:#eaf5ee;color:#1d6b3a}
+input[aria-invalid="true"]{border-color:#b3261e}
+button.btn{cursor:pointer;font-family:"Playfair Display",serif}
 </style>
 </head>
 <body>
 <main class="page">
   <section class="left">
-    <div class="logo">EventHub</div>
-    <div class="wrap">
+    <a class="logo" href="eventhub_landing.php" style="color:inherit;text-decoration:none">EventHub</a>
+    <form class="wrap" method="post" action="eventhub_signIn.php" novalidate>
+      <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
       <h1>Welcome Back</h1>
       <p class="sub">Sign in to manage your tickets</p>
+      <?php if ($flash): ?><p class="msg" role="status"><?= e($flash) ?></p><?php endif; ?>
 
       <div class="field">
         <label for="email">Email / Username</label>
-        <input id="email" type="text" autocomplete="username">
+        <input id="email" name="identity" type="text" autocomplete="username" value="<?= e($old) ?>"<?= $errors['identity'] ? ' aria-invalid="true"' : '' ?>>
+        <p class="fe" role="alert"><?= e($errors['identity']) ?></p>
       </div>
       <div class="field">
         <label for="pw">Password</label>
-        <input id="pw" type="password" autocomplete="current-password">
+        <input id="pw" name="password" type="password" autocomplete="current-password"<?= $errors['password'] ? ' aria-invalid="true"' : '' ?>>
+        <p class="fe" role="alert"><?= e($errors['password']) ?></p>
       </div>
 
-      <a class="btn primary" data-link="signIn" href="#">Sign In</a>
-      <a class="btn secondary" data-link="google" href="#">Continue with Google</a>
+      <button class="btn primary" type="submit">Sign In</button>
+      <a class="btn secondary" href="#" title="Google sign-in isn't connected yet">Continue with Google</a>
       <div class="links">
-        <a class="link" data-link="forgot" href="#">Forgot Password?</a>
-        <a class="link" id="MovetoCreateBtn" data-link="create" href="eventhub_signup.html">Create Account</a>
+        <a class="link" href="eventhub_passReset.php">Forgot Password?</a>
+        <a class="link" id="MovetoCreateBtn" href="eventhub_signup.php">Create Account</a>
       </div>
-    </div>
+    </form>
   </section>
   <aside class="art" aria-hidden="true"><canvas id="art"></canvas></aside>
 </main>
-
-<script>
-var AUTH_KEY = "eventhub_user";
-
-/* ---- Set your page links here. Leave "#" until the page exists. ---- */
-var LINKS = {
-  signIn: "eventhub_landing.html",
-  google: "#",
-  forgot: "eventhub_passReset.html",
-  create: "eventhub_signup.html"
-};
-
-function signIn(user){
-  try { localStorage.setItem(AUTH_KEY, JSON.stringify(user)); } catch(e) {}
-  window.location.href = LINKS.signIn;
-}
-
-document.querySelectorAll("[data-link]").forEach(function(a){
-  var key = a.dataset.link, url = LINKS[key];
-  a.setAttribute("href", url || "#");
-
-  // Sign In and Google need to set the signed-in flag, so handle them separately
-  if(key === "signIn"){
-    a.addEventListener("click", function(e){
-      e.preventDefault();
-      var id = document.getElementById("email").value.trim();
-      var pw = document.getElementById("pw").value;
-      if(!id || !pw) return;   // swap in real validation and error messages
-
-      // TODO: check the credentials with your auth service first,
-      // and only call signIn() if they're correct. Use the real name, email and photo.
-      signIn({
-        name: id.indexOf("@") > -1 ? id.split("@")[0] : id,
-        email: id.indexOf("@") > -1 ? id : "",
-        photo: ""
-      });
-    });
-  } else if(key === "google"){
-    a.addEventListener("click", function(e){
-      e.preventDefault();
-      // Add your Google OAuth flow here, then call signIn({ name, email, photo }).
-    });
-  } else if(!url || url === "#"){
-    a.addEventListener("click", function(e){ e.preventDefault(); });
-  }
-});
-
-// Pressing Enter in either field submits the form
-["email","pw"].forEach(function(id){
-  document.getElementById(id).addEventListener("keydown", function(e){
-    if(e.key === "Enter") document.querySelector('[data-link="signIn"]').click();
-  });
-});
-</script>
 </body>
 </html>

@@ -1,3 +1,67 @@
+<?php
+require_once __DIR__ . '/config.php';
+
+$errors  = ['identity' => '', 'password' => '', 'confirm' => ''];
+$status  = '';
+$bad     = false;
+$devLink = '';
+$old     = '';
+
+/* Step 2: the person clicked the emailed link -> apply the new password */
+if (isset($_GET['token'])) {
+    $hash = hash('sha256', (string)$_GET['token']);
+    $st = db()->prepare('SELECT ResetID, UserID, NewPasswordHash FROM PasswordResets WHERE TokenHash = ? AND UsedAt IS NULL AND ExpiresAt > NOW()');
+    $st->execute([$hash]);
+    if ($row = $st->fetch()) {
+        $pdo = db();
+        $pdo->beginTransaction();
+        $pdo->prepare('UPDATE Users SET PasswordHash = ? WHERE UserID = ?')->execute([$row['NewPasswordHash'], $row['UserID']]);
+        $pdo->prepare('UPDATE PasswordResets SET UsedAt = NOW() WHERE UserID = ? AND UsedAt IS NULL')->execute([$row['UserID']]);
+        $pdo->commit();
+        flash_set('Your password has been updated. Sign in with your new password.');
+        redirect('eventhub_signIn.php');
+    }
+    $status = 'That confirmation link is invalid or has expired. Request a new one below.';
+    $bad = true;
+}
+
+/* Step 1: the form */
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $old = trim((string)($_POST['identity'] ?? ''));
+    $pw  = (string)($_POST['password'] ?? '');
+    $cf  = (string)($_POST['confirm'] ?? '');
+
+    if (!csrf_ok()) {
+        $status = 'Your session expired. Please try again.'; $bad = true;
+    } else {
+        if ($old === '') $errors['identity'] = 'Enter your email or username.';
+        if ($m = valid_password($pw)) $errors['password'] = $m === 'Enter a password.' ? 'Enter a new password.' : $m;
+        if ($cf === '') $errors['confirm'] = 'Confirm your new password.';
+        elseif ($cf !== $pw) $errors['confirm'] = "Passwords don't match.";
+
+        if (!array_filter($errors)) {
+            $u = find_user_by_identity($old);
+            if ($u && $u['IsActive']) {
+                $token = bin2hex(random_bytes(32));
+                $pdo = db();
+                $pdo->prepare('DELETE FROM PasswordResets WHERE UserID = ? AND UsedAt IS NULL')->execute([$u['UserID']]);
+                $pdo->prepare('INSERT INTO PasswordResets (UserID, TokenHash, NewPasswordHash, ExpiresAt, RecordDateTime) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR), NOW())')
+                    ->execute([$u['UserID'], hash('sha256', $token), password_hash($pw, PASSWORD_DEFAULT)]);
+
+                $link = site_url() . '/eventhub_passReset.php?token=' . $token;
+                $sent = @mail($u['Email'], 'Confirm your EventHub password change',
+                    "Hi {$u['Username']},\n\nWe got a request to change your EventHub password. Confirm it here (valid for 1 hour):\n\n$link\n\nIf this wasn't you, ignore this email and your password stays the same.",
+                    'From: ' . MAIL_FROM);
+                if (!$sent) error_log("EventHub: could not send reset email to {$u['Email']}");
+                if (DEV_MODE) $devLink = $link;
+            }
+            // Same message whether or not the account exists, so this page can't be used to probe for accounts.
+            $status = 'If an account matches, we\'ve emailed a link. Your new password takes effect once you confirm it.';
+            $old = '';
+        }
+    }
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -221,6 +285,8 @@
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }
+.status.bad{color:var(--error)}
+.devlink{margin:14px 0 0;padding:10px 12px;border-radius:8px;background:#fff7e0;border:1px solid #e6cf85;font:400 11px var(--sans);word-break:break-all}
 </style>
 </head>
 <body>
@@ -231,63 +297,51 @@
   </aside>
 
   <section class="panel">
-    <!-- LINK: logo → home page -->
-    <a class="brand" id="link-home" href="#" data-link="home">EventHub</a>
+    <a class="brand" id="link-home" href="eventhub_landing.php">EventHub</a>
 
     <div class="form-wrap">
       <h1>Reset Password</h1>
 
-      <form id="reset-form" novalidate>
+      <form id="reset-form" method="post" action="eventhub_passReset.php" novalidate>
+        <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
+
         <div class="field">
           <label for="identity">Email / Username</label>
-          <input id="identity" name="identity" type="text" autocomplete="username" required>
-          <p class="error" id="identity-error" role="alert"></p>
+          <input id="identity" name="identity" type="text" autocomplete="username" required value="<?= e($old) ?>"<?= $errors['identity'] ? ' aria-invalid="true"' : '' ?>>
+          <p class="error" id="identity-error" role="alert"><?= e($errors['identity']) ?></p>
         </div>
 
         <div class="field">
           <label for="password">New Password</label>
           <div class="input-wrap has-toggle">
-            <input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required>
+            <input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required<?= $errors['password'] ? ' aria-invalid="true"' : '' ?>>
             <button type="button" class="toggle" data-target="password" aria-label="Show new password">Show</button>
           </div>
-          <p class="error" id="password-error" role="alert"></p>
+          <p class="error" id="password-error" role="alert"><?= e($errors['password']) ?></p>
         </div>
 
         <div class="field">
           <label for="confirm">Password Confirmation</label>
           <div class="input-wrap has-toggle">
-            <input id="confirm" name="confirm" type="password" autocomplete="new-password" required>
+            <input id="confirm" name="confirm" type="password" autocomplete="new-password" required<?= $errors['confirm'] ? ' aria-invalid="true"' : '' ?>>
             <button type="button" class="toggle" data-target="confirm" aria-label="Show password confirmation">Show</button>
           </div>
-          <p class="error" id="confirm-error" role="alert"></p>
+          <p class="error" id="confirm-error" role="alert"><?= e($errors['confirm']) ?></p>
         </div>
 
         <button class="btn" id="submit-btn" type="submit">Reset Password</button>
-        <p class="status" id="status" role="status"></p>
+        <p class="status<?= $bad ? ' bad' : '' ?>" id="status" role="status"><?= e($status) ?></p>
+        <?php if ($devLink): ?>
+          <p class="devlink"><strong>Dev mode:</strong> <a href="<?= e($devLink) ?>"><?= e($devLink) ?></a></p>
+        <?php endif; ?>
       </form>
 
-      <!-- LINK: back to sign in page -->
-      <a class="back" id="link-signin" href="#" data-link="signIn">Return to Sign In</a>
+      <a class="back" id="link-signin" href="eventhub_signIn.php">Return to Sign In</a>
     </div>
   </section>
 </main>
 
 <script>
-  const LINKS = {
-    signIn:      "eventhub_signIn.html",   // "Return to Sign In" link
-    afterSubmit: ""    
-  };
-
-  /* Wire up every element with a data-link attribute */
-  document.querySelectorAll("[data-link]").forEach(el => {
-    const url = LINKS[el.dataset.link];
-    if (url) {
-      el.setAttribute("href", url);
-    } else {
-      el.addEventListener("click", e => e.preventDefault());
-    }
-  });
-
   /* Show / hide password */
   document.querySelectorAll(".toggle").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -300,7 +354,7 @@
     });
   });
 
-  /* Validation + submit */
+  /* Quick client-side check for instant feedback; the server re-checks everything. */
   const form = document.getElementById("reset-form");
   const identity = document.getElementById("identity");
   const password = document.getElementById("password");
@@ -315,65 +369,35 @@
 
   function validate() {
     let firstBad = null;
-    const id = identity.value.trim();
-    const pw = password.value;
-
+    const id = identity.value.trim(), pw = password.value;
     let msg = "";
     if (!id) msg = "Enter your email or username.";
     else if (id.includes("@") && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(id)) msg = "Enter a valid email address.";
-    setError(identity, msg);
-    if (msg) firstBad = firstBad || identity;
+    setError(identity, msg); if (msg) firstBad = firstBad || identity;
 
     msg = "";
     if (!pw) msg = "Enter a new password.";
     else if (pw.length < 8) msg = "Use at least 8 characters.";
-    setError(password, msg);
-    if (msg) firstBad = firstBad || password;
+    setError(password, msg); if (msg) firstBad = firstBad || password;
 
     msg = "";
     if (!confirmField.value) msg = "Confirm your new password.";
     else if (confirmField.value !== pw) msg = "Passwords don't match.";
-    setError(confirmField, msg);
-    if (msg) firstBad = firstBad || confirmField;
-
+    setError(confirmField, msg); if (msg) firstBad = firstBad || confirmField;
     return firstBad;
   }
 
   [identity, password, confirmField].forEach(input =>
     input.addEventListener("input", () => {
       if (input.getAttribute("aria-invalid") === "true") validate();
-      statusEl.textContent = "";
     })
   );
 
-  form.addEventListener("submit", async e => {
-    e.preventDefault();
-    statusEl.textContent = "";
+  form.addEventListener("submit", e => {
     const bad = validate();
-    if (bad) { bad.focus(); return; }
-
+    if (bad) { e.preventDefault(); bad.focus(); return; }
     submitBtn.disabled = true;
     submitBtn.textContent = "Sending…";
-
-    /* ---- BACKEND HOOK ----
-       Replace this block with your real request, e.g.
-       await fetch("/api/reset-password", {
-         method: "POST",
-         headers: { "Content-Type": "application/json" },
-         body: JSON.stringify({ identity: identity.value.trim(), password: password.value })
-       });
-    */
-    await new Promise(r => setTimeout(r, 600));
-
-    submitBtn.disabled = false;
-    submitBtn.textContent = "Send Reset Link";
-
-    if (LINKS.afterSubmit) {
-      window.location.href = LINKS.afterSubmit;
-    } else {
-      statusEl.textContent = "Reset link sent. Check your inbox.";
-      form.reset();
-    }
   });
 </script>
 </body>
